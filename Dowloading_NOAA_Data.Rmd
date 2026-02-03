@@ -1,0 +1,205 @@
+---
+title: "Downloading NOAA Data"
+output: html_document
+date: "`r Sys.Date()`"
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r set.knitr.options, echo=FALSE, message=FALSE, warning=FALSE}
+#-----set knitr options-----
+
+# clear environment
+rm(list = ls())
+
+# knitr options
+suppressMessages(library(knitr))
+opts_chunk$set(tidy = FALSE, echo = TRUE, message = FALSE)
+
+# Load pacman, installing if needed and other packages as needed
+if (!require("pacman")) { install.packages("pacman", repos = "http://cran.r-project.org") }
+
+# Load other packages, installing as needed.
+pacman::p_load(tidyverse, dplyr, httr, jsonlite, tigris, sf, gstat)
+
+
+```
+
+# About NOAA
+
+The National Oceanic and Atmospheric Administration (NOAA) is a U.S.
+federal agency that provides publicly available climate and weather
+data, including long-term daily temperature, precipitation, and other
+atmospheric variables. NOAA operates thousands of ground-based weather
+stations across the country and maintains a large archive of historical
+and near-real-time data.
+
+## Using NOAA API
+
+We will access NOAA data using the NOAA Climate Data Online (CDO) API,
+which allows users to programmatically retrieve weather observations by
+specifying parameters. To use the API, users must register for a free
+API token from NOAA, and send HTTP requests with that token included.
+
+In our project, we used the NOAA API to download daily temperature data
+from two San Francisco stations for the period 2018–2015, which we will
+then compared with Daymet estimates for validation.
+
+This code will walk through obtaining weather data from NOAA API. First,
+you will need to obtain an API Token to use the NOAA website.
+
+```{r token, echo = FALSE}
+# Set your NOAA API Token (replace with your own API key)
+noaa_token <- ### 
+
+```
+
+### API Function
+
+The function can be used based on the year, location id, and data type.
+These inputs can be changed depending on what you would like to
+download. The code below is using the FIPS code for San Francisco
+county.
+
+```{r api.function, eval = FALSE}
+
+fetch_noaa_data_paginated <- function(start_date, end_date, location_id, datatypeids, token) {
+  base_url <- "https://www.ncdc.noaa.gov/cdo-web/api/v2/data"
+  all_results <- list()
+  offset <- 1
+  limit <- 1000
+  more_data <- TRUE
+  
+  # Create the base query
+  params <- list(
+    datasetid = "GHCND",
+    locationid = location_id,
+    startdate = start_date,
+    enddate = end_date,
+    units = "metric",
+    limit = limit,
+    offset = offset
+  )
+  
+  # Build the query string with multiple datatypeids
+  datatypeid_params <- paste(paste0("datatypeid=", datatypeids), collapse = "&")
+  
+  while(more_data) {
+    # Build the full URL with parameters
+    full_url <- modify_url(
+      base_url,
+      query = c(params, list(offset = offset))
+    )
+    # Add the datatypeids manually
+    full_url <- paste0(full_url, "&", datatypeid_params)
+    
+    response <- GET(full_url, add_headers(token = token))
+    if (status_code(response) != 200) {
+      cat("Error: Status", status_code(response), "\n")
+      break
+    }
+    results <- fromJSON(content(response, "text", encoding = "UTF-8"))
+    if (!is.null(results$results)) {
+      all_results <- append(all_results, list(results$results))
+      num_results <- length(results$results)
+      cat("Fetched", num_results, "records (offset", offset, ")\n")
+      offset <- offset + limit
+      if (num_results < limit) {
+        more_data <- FALSE
+      }
+    } else {
+      more_data <- FALSE
+    }
+    Sys.sleep(1)
+  }
+  if (length(all_results) > 0) {
+    return(bind_rows(all_results))
+  } else {
+    return(NULL)
+  }
+}
+
+
+```
+
+### Downloading data
+
+Below we use the function created above to download data for the County
+of San Francisco using it's FIPS code.
+
+```{r use.fips.id, echo = FALSE}
+
+# Example usage (loop by year, API works better if 1 year or less of data being requested at a time)
+all_data <- list()
+for (yr in 2000:2024) {
+  cat("Downloading data for year:", yr, "\n")
+  res <- fetch_noaa_data_paginated(
+    start_date = paste0(yr, "-01-01"),
+    end_date = paste0(yr, "-12-31"),
+    location_id = "FIPS:06075", # FIPS for SF
+    datatypeids = c("TMAX", "TMIN", "TAVG"), # Indicate the types of data being downloaded
+    token = noaa_token
+  )
+  if (!is.null(res)) {
+    all_data[[as.character(yr)]] <- res
+  }
+}
+
+sf_weather <- bind_rows(all_data)
+
+
+# save the data as a CSV to use for later 
+
+write.csv(sf_weather, "sf_weather_noaa_2000_2024.csv", row.names = FALSE)
+
+```
+
+### Combine weather and station data
+
+We then join weather data with station data, this will add the lat/long
+data needed for next step in the interpolation.
+
+```{r combine.data, echo = FALSE}
+
+# read in downloaded csv of data 
+# sf_weather <- read_csv("Climate Change/sf_weather_noaa_2000_2024.csv")
+
+
+# get list of stations in san francisco 
+
+response <- GET(
+  url = "https://www.ncei.noaa.gov/cdo-web/api/v2/stations",
+  query = list(
+    locationid = "FIPS:06075",   # San Francisco city code
+    datasetid = "GHCND",
+    limit = 1000
+  ),
+  add_headers(token = noaa_token)
+)
+
+stations_json <- fromJSON(content(response, "text", encoding = "UTF-8"))
+sf_stations_api <- stations_json$results
+
+# Show the resulting stations
+sf_station_ids <- sf_stations_api$id
+sf_weather_only <- sf_weather %>% filter(station %in% sf_station_ids)
+# Convert sf_stations_api to a tibble/data frame if not already
+sf_stations_df <- as_tibble(sf_stations_api)
+
+# Join weather data to station metadata (by station ID)
+sf_weather_with_meta <- sf_weather_only %>%
+  left_join(sf_stations_df, by = c("station" = "id"))
+
+
+# Convert to Spatial Data
+weather_points <- st_as_sf(sf_weather_with_meta, coords = c("longitude", "latitude"), crs = 4326)
+
+
+# Get 2020 census tracts for San Francisco County (FIPS: 075)
+sf_tracts <- tracts(state = "CA", county = "San Francisco", year = 2020, class = "sf")
+
+# plot(sf_tracts$geometry)
+
+sf_tracts <- st_transform(sf_tracts, crs = 4326)
+

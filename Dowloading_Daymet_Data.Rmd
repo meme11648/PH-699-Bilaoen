@@ -1,0 +1,131 @@
+---
+title: "Downloading Daymet Data"
+output: html_document
+date: "`r Sys.Date()`"
+---
+
+```{r set.knitr.options, include= FALSE, message=FALSE, warning=FALSE}
+#-----set knitr options-----
+
+# clear environment
+rm(list = ls())
+
+# knitr options
+suppressMessages(library(knitr))
+opts_chunk$set(tidy = FALSE, echo = TRUE, message = FALSE)
+
+# Load pacman, installing if needed and other packages as needed
+if (!require("pacman")) { install.packages("pacman", repos = "http://cran.r-project.org") }
+
+# Load other packages, installing as needed.
+pacman::p_load(tidyverse, dplyr, httr, jsonlite, tigris, sf, gstat, daymetr)
+
+```
+
+# About Daymet
+
+Unlike NOAA (National Oceanic and Atmospheric Administration), which uses observational climate and weather data collected from ground stations, satellites, and other sources, Daymet provides gridded daily surface weather data (e.g., temperature, precipitation) for North America, derived from interpolation of ground-based station data, and is especially useful for ecological and environmental modeling where spatially continuous data are needed.
+
+## Using Daymet R package
+
+We will use the *daymetr* package to download weather data from 2018-2025. More information and examples of how to use the R package can be found here: <https://cran.r-project.org/web/packages/daymetr/vignettes/daymetr-vignette.html>
+
+To download the data we need to select the locations of the estimates. Given we want to examine weather at the census tract level, we can use census tract centroids to extract estimates at these locations.
+
+A census tract centroid is the geographic center point (latitude and longitude) of a census tract, which is a small, relatively permanent subdivision of a county used for statistical purposes. The centroid represents the approximate "middle" of the tract and is often used to link spatial data (like climate or health data) to the tract's location.
+
+First, we need to create a CSV file with information needed for batch downloading using the *daymetr* package.
+
+```{r centroids, echo = FALSE}
+
+# To use Daymet we will need to make csv file with : site (GEOID), latitude, longitude
+
+# Get 2020 census tracts for San Francisco County (FIPS: 075)
+sf_tracts <- tracts(state = "CA", county = "San Francisco", year = 2020, class = "sf")
+
+# extract centroids 
+tract_centroids <- st_centroid(sf_tracts)
+
+# select the variables 
+sf_centroids <- tract_centroids %>% select(GEOID, INTPTLAT, INTPTLON)
+
+# remove geometry 
+sf_centroid_df <- st_drop_geometry(sf_centroids)
+
+# change to numeric 
+sf_centroid_df <- sf_centroid_df %>% mutate(across(c(INTPTLAT, INTPTLON), as.numeric))
+
+# rename to use with Daymet function 
+sf_centroid_df <- sf_centroid_df %>% 
+                        rename(site = GEOID,
+                               lat = INTPTLAT,
+                               lon = INTPTLON)
+
+
+# save a csv with the centroid locations for San Francisco 
+# write.csv(sf_centroid_df, "sf_centroids.csv", row.names = FALSE)
+
+
+```
+
+### Batch downloads
+
+The download_daymet_batch function from the daymetr R package allows users to download Daymet data for multiple locations in a single batch. Users provide a table of site information (with site names, latitude, and longitude), and the function retrieves daily weather data (e.g., temperature, precipitation) for each site over specified years. It’s useful for efficiently collecting climate data for many locations at once.
+
+```{r daymet.download, eval = TRUE}
+
+# warning: downloading data takes a LONG time to run, so only run once, set chunk to eval = FALSE to help prevent it from running again 
+
+# download batch data using SF centroid locations
+# make sure to indicate the year, end
+# the argument "simplify" can be used to create a dataframe of the data, not using it will result your data to be in a list format 
+
+df_batch <- download_daymet_batch(file_location = "sf_centroids.csv",
+start = 2000,
+end = 2024,
+simplify = TRUE)
+
+
+```
+
+### Data wrangling
+
+We now need to fix the names of the measurement types.
+
+```{r data.wrangling, echo = FALSE}
+
+# what are the names of each category? use unique to find the names  
+unique(sf_daymet$measurement)
+
+sf_daymet <- sf_daymet %>%
+  mutate(measurement = recode(measurement,
+    "tmax..deg.c." = "tmax",
+    "tmin..deg.c." = "tmin",
+    "prcp..mm.day." = "prcp",
+    "srad..W.m.2." = "srad",
+    "swe..kg.m.2." = "swe",
+    "vp..Pa." = "vp",
+    "dayl..s." = "dayl"
+  ))
+
+# check names again 
+unique(sf_daymet$measurement)
+
+# check dimensions, quick check of the number of rows 
+dim(sf_daymet) # 14839442
+
+# remove the level that does not have estimates 
+sf_daymet <- sf_daymet %>%
+  filter(!grepl("outside DAYMET spatial coverage", measurement))
+
+# check dimensions, quick check of the number of rows 
+dim(sf_daymet) # 14839440
+
+# check names again 
+unique(sf_daymet$measurement)
+
+# save a csv with the cleaned up data 
+# write.csv(sf_daymet, "Data/sf_daymet_clean.csv", row.names = FALSE)
+
+```
+
