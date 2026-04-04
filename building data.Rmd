@@ -1,0 +1,69 @@
+---
+title: "building data"
+author: "Mahal Bilaoen"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+pacman::p_load(tidyverse, dplyr, lubridate, stringr)
+```
+
+04/01 - 4:07 PM - look up descriptions in permit data to see if there are additional terms such as                    "ac" or "hvac" 
+                - look if there are duplicates for the same building(s) or unit(s) before/after 2013 
+
+#loading in data 
+```{r}
+before_2013 <- read.csv("Building_Permits_before_January_1,_2013_20260319.csv")
+after_2013 <- read.csv("Building_Permits_filed_on_or_after_January_1,_2013_20260319.csv")
+
+tax_rolls <- read.csv("Assessor_Historical_Secured_Property_Tax_Rolls_20260319.csv")
+
+building_audits <- read.csv("Existing_Buildings_-_Basic_Info_and_Audit_Compliance_Status_20260319.csv")
+```
+
+#looking at crowdedness/building type 
+```{r}
+unique(building_audits$Property.Type...Self.Selected)
+# "Commercial"                 "Multifamily"                "Mixed Residential"          "Commercial - Port Facility" 
+type_order <- c("Multifamily", "Mixed Residential", "Commercial",  "Commercial - Port Facility") #ranks building type on a 1-4, 1 = least, 4 = most or look at tax roll? 
+
+building_audits <- building_audits %>% 
+  mutate(
+    rank = as.numeric(factor(Property.Type...Self.Selected, levels = type_order))
+  )
+```
+
+#air conditioners being added 
+```{r}
+after_2013 <- after_2013 %>% 
+  filter(str_detect(Description, regex("air conditioning", ignore_case = TRUE))) 
+
+#consider other terms such as AC / HVAC 
+
+before_2013 <- before_2013 %>% 
+  filter(str_detect(Description, regex("air conditioning", ignore_case = TRUE)))
+
+
+duplicates <- after_2013[after_2013$Location %in% after_2013$Location[duplicated(after_2013$Location)], ] 
+
+ac <- merge(before_2013, after_2013)
+``` 
+
+#more building type data 
+```{r}
+unique(tax_rolls$Use.Definition)
+#"Commercial Misc"           "Miscellaneous/Mixed-Use"   "Commercial Retail"         "Commercial Hotel"          "Commercial Office"        
+# "Multi-Family Residential"  "Single Family Residential" "Government"                "Industrial"                "" 
+
+
+```
+
+#shapefile data for city ZIPCODE 
+```{r}
+shapefile_path <- "C:/Users/meme1/OneDrive/Documents/PH 699 Bilaoen"
+shape_data <- st_read(shapefile_path)
+```
+
