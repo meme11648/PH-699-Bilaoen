@@ -63,7 +63,7 @@ pertest <- pertest %>%
   filter(month >= 6 & month < 11) 
 #seasonal bias to ONLY track assumed heatwave related days, need to find paper to support this 
 
-percentile_95 <- quantile(pertest$n, probs = 0.95, na.rm = TRUE)
+#percentile_95 <- quantile(pertest$n, probs = 0.95, na.rm = TRUE)
 #95th percentile is 44 calls for years 2018-2023
 #95th percentile is 45 calls for years 2018-2023 BUT only through the summer months 
 
@@ -95,8 +95,11 @@ daymet_heatwaves <- daymet_heatwaves %>%
 daymet_heatwaves <- daymet_heatwaves %>%
   #arrange(site, date) %>%
   group_by(site) %>%
-  mutate(event_id = rleid(hw)) 
+  mutate(event_id = rleid(hw))
+```
 
+
+```{r}
 #summarise TRUE runs and 2+ day heatwaves
 hw_events_2day <- daymet_heatwaves %>%
   filter(hw) %>% #keeps only heatwave days
@@ -125,8 +128,6 @@ hw_events_3day <- daymet_heatwaves %>%
   ) %>%
   filter(duration >= 3) # enforce 3+ days
 ```
-
-#yearly AT outcomes 
 Would it be possible to run this model on a yearly basis (counts of hw days vs non hw days)? In order to avoid running extremely long models?  
 ```{r}
 hw_yearly_3day <- hw_events_3day %>%
@@ -169,13 +170,19 @@ hist(pertest$n)
 
 #merging AT and 911 dfs
 ```{r}
-overall <- left_join(
+overall_current <- left_join(
   pertest,
   daymet_heatwaves,
   by = c("Call.Date" = "date", "Zipcode.of.Incident" = "zip_code"),
   na_matches = "never"
 )
 
+overall_current <- overall %>% 
+  filter(month >= 6 & month < 11) %>% #filtering for seasonality 
+  mutate(day_abbr = format(as.Date(Call.Date), "%a"),
+         date = Call.Date, 
+         AT = (-1.3 + 0.92*(tmean) + 2.2*(vp)),
+        ATmin = (-1.3 + 0.92*(tmin) + 2.2*(vp)))
 ```
 
 #bayesian model for at and 911 calls 
@@ -231,7 +238,7 @@ sd(Intercept)     0.96      0.15     0.73     1.31 1.03      113      145
 Regression Coefficients:
           Estimate Est.Error l-95% CI u-95% CI Rhat Bulk_ESS Tail_ESS
 Intercept     2.11      0.22     1.72     2.55 1.20       14      118 ->rhat still too high 
-hwTRUE        0.07      0.00     0.06     0.07 1.00     2346     1739
+hwTRUE        0.07      0.00     0.06     0.07 1.00     2346     1739 
 
 Further Distributional Parameters:
       Estimate Est.Error l-95% CI u-95% CI Rhat Bulk_ESS Tail_ESS
@@ -253,7 +260,7 @@ sd(Intercept)     0.93      0.13     0.70     1.23 1.15       23       89
 Regression Coefficients:
           Estimate Est.Error l-95% CI u-95% CI Rhat Bulk_ESS Tail_ESS
 Intercept     2.06      0.19     1.75     2.49 1.80        6       13  <- rhat >1
-hwTRUE        0.07      0.00     0.06     0.07 1.01      782      591
+hwTRUE        0.07      0.00     0.06     0.07 1.01      782      591 
 
 Further Distributional Parameters:
       Estimate Est.Error l-95% CI u-95% CI Rhat Bulk_ESS Tail_ESS
@@ -269,6 +276,80 @@ plot(fit) #i am not entirely sure how to read these graphs
  
 
 ```
+
+#casecross for 2018-2023
+```{r}
+overall_current$hw95
+
+model1 = casecross(n ~ hw95+AT, #outcome to exposure 
+                   matchdow = TRUE, #match days of week to each other
+                   stratamonth = TRUE, #match months to each other 
+                  data = overall_current)
+summary(model1)
+
+model2 = casecross(n ~ hw95 + AT, #exposure to outcome 
+                   matchdow = TRUE, #match days of week to each other
+                   stratamonth = FALSE, #match months to each other
+                  data = overall)
+summary(model2)
+
+
+```
+Filtering for  only months 6 - 11 for seasonality 
+Time-stratified case-crossover with months as strata
+Matched on day of the week
+Total number of cases 47660 
+Number of case days with available control days 153 
+Average number of control days per case day 3.4 
+
+matching months and dow Parameter Estimates:
+                coef exp(coef)    se(coef)         z     Pr(>|z|)
+hw95TRUE -0.03883745 0.9619071 0.022096266 -1.757648 0.0788074715
+AT        0.01310803 1.0131943 0.003452059  3.797164 0.0001463609 
+
+Time-stratified case-crossover with a stratum length of 28 days
+Matched on day of the week
+Total number of cases 113939 
+Number of case days with available control days 364 
+Average number of control days per case day 3 
+
+matching only dow Parameter Estimates:
+                coef exp(coef)    se(coef)         z     Pr(>|z|)
+hw95TRUE -0.02112286 0.9790987 0.017218944 -1.226722 2.199270e-01
+AT        0.01005921 1.0101100 0.002113482  4.759544 1.940307e-06
+
+No seasonality filtering done 
+Time-stratified case-crossover with months as strata 
+Matched on day of the week
+Total number of cases 1688310 
+Number of case days with available control days 431 
+Average number of control days per case day 3.1 
+
+Model 1 Parameter Estimates:
+                coef exp(coef)    se(coef)           z     Pr(>|z|)
+hwTRUE  8.073571e-05 1.0000807 0.003948637  0.02044648 9.836872e-01
+AT     -6.743974e-03 0.9932787 0.001293006 -5.21573168 1.830931e-07
+
+Time-stratified case-crossover with a stratum length of 28 days
+Matched on day of the week
+Total number of cases 1550857 
+Number of case days with available control days 396 
+Average number of control days per case day 2.4 
+
+Model 2 Parameter Estimates:
+               coef exp(coef)    se(coef)          z    Pr(>|z|)
+hwTRUE  0.000883912 1.0008843 0.004005954  0.2206496 0.825365312
+AT     -0.004257110 0.9957519 0.001497098 -2.8435743 0.004461061
+
+```{r}
+model_match = casecross(n ~ AT, #outcome to exposure 
+                   matchdow = TRUE, #match days of week to each other
+                   stratamonth = TRUE, #match months to each other 
+                   matchconf = 'hw95',
+                  data = overall_current) 
+summary(model_match)
+```
+
 
 # Case Crossover Design 
 Due to a lack of ability to obtain significant coefficients in (rhat >1), switching over to a casecross design will give insights into whether or not medical incident type calls increases when a heatwave occurs. This does not paint a complete picture in defining a baseline amount of 911 calls as a Bayesian model would. However, this type of study design is useful for looking at overall trends. 
@@ -337,9 +418,10 @@ overall <- left_join(
 ) 
 
 overall <- overall %>% 
-  mutate(day_abbr = format(as.Date(Call.Date), "%a"),
-         date = Call.Date) %>% #adding day of week to match cases/controls 
-  relocate(tmean, hw95,day_abbr, .after = n) #visual sanity
+  mutate(day_abbr = format(as.Date(Call.Date), "%a"), 
+         date = Call.Date, #adding day of week to match cases/controls
+         stratum_id = interaction(month, day_abbr, drop = TRUE)) %>%  #creating a strata based on dow and month 
+  relocate(tmean, hw95,day_abbr,stratum_id, .after = n) #visual sanity
 
 #mon tue wed thu fri sat sun 
 ```
@@ -352,7 +434,7 @@ incorporate a 3 day lag like the cdph --> states that heat related stroke deaths
 12:36 pm 1:48 pm - do 2018 - 2023 data ? 
 ```{r}
 #day of week case cross 
-model2 = casecross(n ~ hw95+tmean, matchdow = TRUE, data = overall)
+model2 = casecross(n ~ hw95+AT, matchdow = TRUE, data = overall)
 summary(model2)
 head(model2)
 ```
@@ -362,7 +444,22 @@ Total number of cases 113939
 Number of case days with available control days 364 
 Average number of control days per case day 3 
 
+              coef exp(coef)  se(coef)      z        p
+hw95TRUE -0.021123  0.979099  0.017219 -1.227     0.22 
+AT        0.010059  1.010110  0.002113  4.760 1.94e-06 
+
+Likelihood ratio test=28.1  on 2 df, p=7.913e-07
+n= 10495, number of events= 9403 
+
+```{r}
+sep_2017 <- overall %>% 
+  filter(month == 9, day_abbr == "Fri") 
+
+sep_model = casecross(n ~ AT, matchconf = "hw95", data = overall)
+summary(sep_model)
+```
 Parameter Estimates:
-                 coef exp(coef)    se(coef)          z     Pr(>|z|)
-hw95TRUE -0.014804682 0.9853044 0.017735190 -0.8347631 4.038511e-01 <- not sig BUT only within a yr
-tmean     0.008534511 1.0085710 0.002188718  3.8993190 9.646363e-05 
+         coef exp(coef)    se(coef)        z     Pr(>|z|)
+AT 0.01082299  1.010882 0.001658571 6.525492 6.777886e-11 
+
+is this actually relevant? 

@@ -28,13 +28,16 @@ building_audits <- read.csv("Existing_Buildings_-_Basic_Info_and_Audit_Complianc
 ```{r}
 unique(building_audits$Property.Type...Self.Selected)
 # "Commercial"                 "Multifamily"                "Mixed Residential"          "Commercial - Port Facility" 
-type_order <- c("Multifamily", "Mixed Residential", "Commercial",  "Commercial - Port Facility") #ranks building type on a 1-4, 1 = least, 4 = most or look at tax roll? 
+type_order <- c("Multifamily", "Mixed Residential", "Commercial",  "Commercial - Port Facility")  #ranks building type on a 1-4, 1 = least, 4 = most or look at tax roll? 
 
 building_audits <- building_audits %>% 
   mutate(
     rank = as.numeric(factor(Property.Type...Self.Selected, levels = type_order))
   )
 ```
+
+
+map air conditioning by age 
 
 #air conditioners being added 
 ```{r}
@@ -49,7 +52,8 @@ before_2013 <- before_2013 %>%
 
 duplicates <- after_2013[after_2013$Location %in% after_2013$Location[duplicated(after_2013$Location)], ] 
 
-ac <- merge(before_2013, after_2013)
+#need to erase duplicates(?) 
+ac <- merge(before_2013, after_2013) 
 ``` 
 
 #more building type data 
