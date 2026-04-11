@@ -233,12 +233,17 @@ Formula: n ~ hw + (1 | Zipcode.of.Incident)
 Multilevel Hyperparameters:
 ~Zipcode.of.Incident (Number of levels: 25) 
               Estimate Est.Error l-95% CI u-95% CI Rhat Bulk_ESS Tail_ESS
-sd(Intercept)     0.96      0.15     0.73     1.31 1.03      113      145
+sd(Intercept)     0.96      0.15     0.73     1.31 1.03      113      145 
+sd = standard deviation, e^0.96 = 2.61 --> how many times a baseline can be different per zipcode   
 
 Regression Coefficients:
           Estimate Est.Error l-95% CI u-95% CI Rhat Bulk_ESS Tail_ESS
 Intercept     2.11      0.22     1.72     2.55 1.20       14      118 ->rhat still too high 
-hwTRUE        0.07      0.00     0.06     0.07 1.00     2346     1739 
+hwTRUE        0.07      0.00     0.06     0.07 1.00     2346     1739  
+
+intercecpt = expected baseline call on a NON-hw day, e^2.11 = 8.25 calls per zipcode expected 
+
+estimate = 0.07 --> e^0.07 = 1.072 --> (1.072-1)*100% = 7.25% increase in medical calls when it is a heatwave vs not 
 
 Further Distributional Parameters:
       Estimate Est.Error l-95% CI u-95% CI Rhat Bulk_ESS Tail_ESS
@@ -293,7 +298,6 @@ model2 = casecross(n ~ hw95 + AT, #exposure to outcome
                   data = overall)
 summary(model2)
 
-
 ```
 Filtering for  only months 6 - 11 for seasonality 
 Time-stratified case-crossover with months as strata
@@ -306,6 +310,10 @@ matching months and dow Parameter Estimates:
                 coef exp(coef)    se(coef)         z     Pr(>|z|)
 hw95TRUE -0.03883745 0.9619071 0.022096266 -1.757648 0.0788074715
 AT        0.01310803 1.0131943 0.003452059  3.797164 0.0001463609 
+
+1.31943% 
+From this model, we can confidently say that there is a small chance of medical calls happening when temperature rises. For every 1C (2.54 F) increase in AT, there is a 1.31% chance of medical calls increasing for that day. While this chance/likeliehood may seem small, the model seems to point towards an increase in heat may be related to an increase of medical calls for a particular day whether or not the daily temperature is a heatwave day or not.  
+
 
 Time-stratified case-crossover with a stratum length of 28 days
 Matched on day of the week
@@ -457,9 +465,16 @@ sep_2017 <- overall %>%
 
 sep_model = casecross(n ~ AT, matchconf = "hw95", data = overall)
 summary(sep_model)
+
 ```
 Parameter Estimates:
          coef exp(coef)    se(coef)        z     Pr(>|z|)
 AT 0.01082299  1.010882 0.001658571 6.525492 6.777886e-11 
 
-is this actually relevant? 
+coefficient = log of exp(coeff)
+exp(coef) = odds ratio --> (1.010882 - 1)*100% = 1.0882% OR 1.09% odds are increases when AT increases by 1
+se(coef) = standard error 
+z = how many standard errors there are away from 0 (farther from 0 is better)
+Pr(>|z|) = p value, very small very good! 
+
+is this actually relevant? -- kind of? 

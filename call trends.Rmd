@@ -1,0 +1,90 @@
+---
+title: "Call Trends"
+author: "Mahal Bilaoen"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r}
+knitr::opts_chunk$set(echo = TRUE)
+
+pacman::p_load(tidyverse,dplyr,ggplot2,lubridate,brms, data.table )
+```
+
+04/10 8:00 pm 
+I made a new doc bc i got tired of scrolling thru a lot of lines of code -- i think it might be useful to graph and look at general trends to have some sort of "at a glance" information about the data. 
+
+tbh the graphs aren't all that impressive as i thought they would turn out
+
+```{r}
+#loading in all the data 
+medical_incidents <- read.csv("Fire_Department_and_Emergency_Medical_Services_Dispatched_Calls_for_Service_20260309.csv")
+
+sdaymet_current <- read.csv("daymet_current.csv")
+```
+
+```{r}
+medical_incidents <- medical_incidents %>%
+  mutate(Call.Date = mdy(Call.Date)) %>%
+  count(Zipcode.of.Incident, Call.Date)
+
+medical_incidents <- medical_incidents %>% 
+  mutate(Year = year(Call.Date),
+         month = month(Call.Date)) %>%
+  filter(month >= 6 & month <= 11) %>%
+  relocate(Year, .after = "Call.Date")
+
+daymet_current <- daymet_current %>%
+  mutate(date = make_date(year = year) + days(yday - 1),
+         month = month(date),
+         p95 = 18.7, #95th percentile for AT 
+         tmean = (tmin+tmax)/2, 
+         vp = vp/1000) 
+
+daymet_current <- daymet_current %>%
+  mutate(AT = (-1.3 + 0.92*(tmean) + 2.2*(vp)))
+
+daymet_heatwaves <- daymet_current %>%
+  distinct(site, date, .keep_all = TRUE)
+
+daymet_heatwaves <- daymet_heatwaves %>%
+  filter(month >= 6 & month <= 11) %>% #restrict to SF summer dates to avoid seasonal bias
+  mutate(hw = tmean > p95)
+
+daymet_heatwaves <- daymet_heatwaves %>%
+  #arrange(site, date) %>%
+  group_by(site) %>%
+  mutate(event_id = rleid(hw)) 
+
+overall_current <- left_join(
+  medical_incidents,
+  daymet_heatwaves,
+  by = c("Call.Date" = "date", "Zipcode.of.Incident" = "zip_code", "month"),
+  na_matches = "never"
+)
+
+overall_current <- overall_current %>% 
+  mutate(date = Call.Date, 
+         AT = (-1.3 + 0.92*(tmean) + 2.2*(vp)),
+        ATmin = (-1.3 + 0.92*(tmin) + 2.2*(vp)))
+```
+
+graph average amount of calls per month compared to average heat 
+```{r}
+monthly <- overall_current %>% 
+  group_by(month) %>%
+  summarise(avg_calls = mean(n, na.rm = TRUE),
+            avg_AT = mean(AT, na.rm = TRUE))
+
+monthly_long <- monthly %>%
+  pivot_longer(
+    cols = c(avg_calls, avg_AT),
+    names_to = "variable",
+    values_to = "value"
+  )
+
+ggplot(monthly_long, aes(x = month, y = value)) +
+  geom_line() +
+  facet_wrap(~variable, scales = "free_y")
+```
+
