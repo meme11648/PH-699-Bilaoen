@@ -23,7 +23,11 @@ pacman::p_load(tidyverse,dplyr,ggplot2,lubridate,brms, data.table, cmdstanr, sea
       #need to double check for problems when at home 
       need to write a white paper 
       #need to do p95 per zipcode, another variable to also include 
-      
+      #make a casecross that does 2 day hw events / 3 
+      #check if variance = mean -> if not change the family 
+        https://www.rdocumentation.org/packages/stats/versions/3.6.2/topics/family 
+      # gnm function --> poisson 
+      #different case crosses between svi groups, Percentage of People under 150% Poverty, Unemployment Rate, Land Cover Intensity, Percent in Group Quarters, Percent Housing Cost Burdened
 
 ## Bayesian modeling 
 
@@ -47,6 +51,8 @@ In order to determine if the hypothesis is true, I will be utilizing the brm fun
 medical_incidents <- read.csv("Fire_Department_and_Emergency_Medical_Services_Dispatched_Calls_for_Service_20260309.csv")
 
 daymet_current <- read.csv("daymet_current.csv")
+
+daymet_p95_byZIP <- read_csv("daymet_p95_byZIP.csv")
 
 ```
 
@@ -77,22 +83,28 @@ daymet_current$site <- paste0("0", daymet_current$site)
 daymet_current <- daymet_current %>%
   mutate(date = make_date(year = year) + days(yday - 1),
          month = month(date),
-         p95 = 18.7, #95th percentile for ATmean, need to convert to min 
          tmean = (tmin+tmax)/2, 
          vp = vp/1000,
-         ATmean = (-1.3 + 0.92*(tmean) + 2.2*(vp))) 
+         ATmean = (-1.3 + 0.92*(tmean) + 2.2*(vp)), 
+         ATmin = (-1.3 + 0.92*(tmin) + 2.2*(vp)),
+         ATmax = (-1.3 + 0.92*(tmax) + 2.2*(vp))) 
 
 daymet_heatwaves <- daymet_current %>%
   distinct(site, date, .keep_all = TRUE)
 
 daymet_heatwaves <- daymet_heatwaves %>%
   filter(month >= 6 & month < 11) %>% #restrict to SF summer dates to avoid seasonal bias
-  mutate(hw = tmean > p95)
+  mutate(hw_mean = tmean > p95_mean,
+         hw_min = tmin > p95_min,
+         hw_max = tmax > p95_max)
 
 daymet_heatwaves <- daymet_heatwaves %>%
-  #arrange(site, date) %>%
   group_by(site) %>%
-  mutate(event_id = rleid(hw))
+  mutate(event_mean = rleid(hw_mean),
+         event_min = rleid(hw_min),
+         event_max = rleid(hw_max))
+
+daymet_heatwaves <- left_join(daymet_heatwaves,daymet_p95_byZIP, by = c("zip_code" = "zip_code", ))
 ```
 
 
@@ -149,8 +161,7 @@ overall_current <- left_join(
 
 overall_current <- overall_current %>% 
   mutate(day_abbr = format(as.Date(Call.Date), "%a"),
-         date = Call.Date, 
-        ATmin = (-1.3 + 0.92*(tmin) + 2.2*(vp)),
+         date = Call.Date,
         strata = interaction(month, day_abbr)) #create strata for cross basis
 ```
 
@@ -246,7 +257,7 @@ AT        0.01310803 1.0131943 0.003452059  3.797164 0.0001463609
 
 1.31943% increase in odds ratio 
 
-From this model, we can confidently say that there is a small chance of medical calls happening when temperature rises. For every 1C (2.54 F) increase in AT, there is a 1.31% chance of medical calls increasing for that day. While this chance/likelihood may seem small, the model seems to point towards an increase in heat may be related to an increase of medical calls for a particular day whether or not the daily temperature is a heatwave day or not. 
+From this model, we can confidently say that there is a small chance of medical calls happening when temperature rises. For every 1C (2.54 F) increase in ATmean, there is a 1.31% chance of medical calls increasing for that day. While this chance/likelihood may seem small, the model seems to point towards an increase in heat may be related to an increase of medical calls for a particular day whether or not the apparent temperature is a heatwave day or not. 
 
 
 In order to incorporate lag into this time-stratified case cross study, cross basis is used to put everything into a package. 
@@ -263,8 +274,10 @@ overall_cbATmean <- cbind(overall_current, cb_ATmean)
 
 # fit the same case-crossover model, replacing AT with the crossbasis
 model_cbMean1 <- glm(n ~ hw + cb_ATmean + factor(strata),
-                     family = poisson(),
-                     data = overall_cbATmean)
+                     family = gaussian(), #need to double check family types, also 
+                     data = overall_cbATmean) 
+
+#binomial doesn't work because in lag matrix values are not 0 OR 1 
 
 pred <- crosspred(cb_ATmean,  
                   model_cbMean1,
@@ -272,12 +285,19 @@ pred <- crosspred(cb_ATmean,
 
 summary(pred)
 
+hist(overall_cbATmean$ATmean)
+
 plot(pred, "overall")
 
 plot(pred, "slices", var = 25)
 ```
 
 ```{r}
+
+mean(overall_current$ATmean, na.rm = TRUE) #16.40 
+var(overall_current$ATmean, na.rm = TRUE) #5.65
+#variance is NOT greater than mean -> family needs to be switched
+
 plot(pred, "slices", var = 25)
 ```
 
@@ -403,9 +423,6 @@ overall_2017 <- overall_2017 %>%
 #casecross model
 incorporate a 3 day lag like the cdph --> states that heat related stroke deaths can occur days later than the initial heatwave 
 
-11:13 am date not in date format? 
-
-12:36 pm 1:48 pm - do 2018 - 2023 data ? 
 ```{r}
 #day of week case cross 
 model2 = casecross(n ~ hw95+AT, matchdow = TRUE, data = overall)
