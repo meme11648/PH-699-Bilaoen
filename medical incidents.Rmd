@@ -8,16 +8,24 @@ output: html_document
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 
-pacman::p_load(tidyverse,dplyr,ggplot2,lubridate,brms, data.table, cmdstanr, season)
+pacman::p_load(tidyverse,dplyr,ggplot2,lubridate,brms, data.table, cmdstanr, season, dlnm, splines, survival)
+
 
 #if you want to use cmdstanr to run code without having to use C++, is supposed to help run MCMC chains faster 
 # install.packages("remotes")
 # remotes::install_github("stan-dev/cmdstanr")
 
-#season package is specifically for case cross design 
+#season package is specifically for case cross design, looking at the relationship 
+#need to use crossbasis to add lag 
 ```
 
-## Bayesian modeling
+04/22 10 am take a deeper dive at crossbasis model --> how does this look for heatwave events before and after (ex sep 2017)
+      #need to double check for problems when at home 
+      need to write a white paper 
+      #need to do p95 per zipcode, another variable to also include 
+      
+
+## Bayesian modeling 
 
 In an attempt to understand which neighborhoods are potentially the most vulnerable due to heatwaves, I will be utilizing a bayesian linear regression model to use medical incidents as a proxy for vulnerability. The goal is to understand where there are the least air conditioning resources are available to people based on medical incidents, assuming that people who are calling in are in dire need of medical care due to heat. 
 
@@ -42,32 +50,23 @@ daymet_current <- read.csv("daymet_current.csv")
 
 ```
 
-04/05 
-6:20 PM - working on case crossover design 
-
 #cleaning 911 calls 
 ```{r}
-per_day <- medical_incidents %>%
-  mutate(Call.Date = mdy(Call.Date)) %>%
+per_day <- medical_incidents |>
+  mutate(Call.Date = mdy(Call.Date)) |>
   count(Zipcode.of.Incident, Call.Date)
 
-per_day <- per_day %>% 
-  mutate(Year = year(Call.Date)) %>%
-  relocate(Year, .after = "Call.Date")
-
-pertest <- per_day
-#duplicate data frame in case something i code is wrong 
-
-pertest <- pertest %>% 
-  mutate(month = month(Call.Date)) %>% 
+per_day <- per_day |>
+  mutate(year = year(Call.Date),
+         month = month(Call.Date)) |>
+  relocate(year, .after = "Call.Date") |> 
   filter(month >= 6 & month < 11) 
+
 #seasonal bias to ONLY track assumed heatwave related days, need to find paper to support this 
 
 #percentile_95 <- quantile(pertest$n, probs = 0.95, na.rm = TRUE)
 #95th percentile is 44 calls for years 2018-2023
 #95th percentile is 45 calls for years 2018-2023 BUT only through the summer months 
-
- 
 
 ```
 
@@ -78,12 +77,10 @@ daymet_current$site <- paste0("0", daymet_current$site)
 daymet_current <- daymet_current %>%
   mutate(date = make_date(year = year) + days(yday - 1),
          month = month(date),
-         p95 = 18.7, #95th percentile for AT 
+         p95 = 18.7, #95th percentile for ATmean, need to convert to min 
          tmean = (tmin+tmax)/2, 
-         vp = vp/1000) 
-
-daymet_current <- daymet_current %>%
-  mutate(AT = (-1.3 + 0.92*(tmean) + 2.2*(vp)))
+         vp = vp/1000,
+         ATmean = (-1.3 + 0.92*(tmean) + 2.2*(vp))) 
 
 daymet_heatwaves <- daymet_current %>%
   distinct(site, date, .keep_all = TRUE)
@@ -99,6 +96,7 @@ daymet_heatwaves <- daymet_heatwaves %>%
 ```
 
 
+how to incorporate hw events + non hw events? ask anthony?? 
 ```{r}
 #summarise TRUE runs and 2+ day heatwaves
 hw_events_2day <- daymet_heatwaves %>%
@@ -128,34 +126,6 @@ hw_events_3day <- daymet_heatwaves %>%
   ) %>%
   filter(duration >= 3) # enforce 3+ days
 ```
-Would it be possible to run this model on a yearly basis (counts of hw days vs non hw days)? In order to avoid running extremely long models?  
-```{r}
-hw_yearly_3day <- hw_events_3day %>%
-  mutate(year = lubridate::year(start_date)) %>%
-  group_by(site, year, zip_code) %>%
-  summarise(
-    #n_events = n(),
-    total_hw_days = sum(duration),
-    #total_hw_events = sum(n_events),
-    #avg_duration = mean(duration),
-    #max_duration = max(duration),
-    yrly_meantemp = mean(mean_tmean),
-    .groups = "drop"
-  )
-
-hw_yearly_2day <- hw_events_2day %>%
-  mutate(year = lubridate::year(start_date)) %>%
-  group_by(site, year, zip_code) %>%
-  summarise(
-    #n_events = n(),
-    total_hw_days = sum(duration),
-    #total_hw_events = sum(n_events),
-    #avg_duration = mean(duration),
-    #max_duration = max(duration),
-    yrly_meantemp = mean(mean_tmean),
-    .groups = "drop"
-  )
-```
 
 #counting the amount of 911 calls 
 -should expect numbers to be within this range of the model, no actual idea on sd   
@@ -171,18 +141,17 @@ hist(pertest$n)
 #merging AT and 911 dfs
 ```{r}
 overall_current <- left_join(
-  pertest,
+  per_day,
   daymet_heatwaves,
-  by = c("Call.Date" = "date", "Zipcode.of.Incident" = "zip_code"),
+  by = c("Call.Date" = "date", "Zipcode.of.Incident" = "zip_code", "year"= "year", "month" = "month"),
   na_matches = "never"
 )
 
-overall_current <- overall %>% 
-  filter(month >= 6 & month < 11) %>% #filtering for seasonality 
+overall_current <- overall_current %>% 
   mutate(day_abbr = format(as.Date(Call.Date), "%a"),
          date = Call.Date, 
-         AT = (-1.3 + 0.92*(tmean) + 2.2*(vp)),
-        ATmin = (-1.3 + 0.92*(tmin) + 2.2*(vp)))
+        ATmin = (-1.3 + 0.92*(tmin) + 2.2*(vp)),
+        strata = interaction(month, day_abbr)) #create strata for cross basis
 ```
 
 #bayesian model for at and 911 calls 
@@ -191,7 +160,6 @@ need to also consider lag
 For more information about the brms package: 
 https://mspeekenbrink.github.io/sdam-r-companion/bayesian-estimation-with-brms.html 
 ```{r}
-
 library(cmdstanr)
 #install_cmdstan()
 set_cmdstan_path(path = NULL)
@@ -212,14 +180,14 @@ fit <- brm(
   warmup = 1000, #"throwaway" sample size 
   backend = "cmdstanr", 
   control = list(adapt_delta = 0.95),
-#  sample_prior = TRUE , #sampling prior while also fitting the model 
-#  seed = 2149 #reproducible sampling #godspeed  
+  seed = 2149, #random but not really
+  sample_prior = TRUE , #sampling prior while also fitting the model 
   ) 
 
 #saving the model after it's been run for future analysis
 #saveRDS(fit, "post_bayesian.rds")
 
-# bayesian <- readRDS("911_bayesian.rds") 
+#bayesian <- readRDS("post_bayesian.rds") 
 
 ```
 04/01 - this is not a funny joke ;_;
@@ -245,40 +213,11 @@ intercecpt = expected baseline call on a NON-hw day, e^2.11 = 8.25 calls per zip
 
 estimate = 0.07 --> e^0.07 = 1.072 --> (1.072-1)*100% = 7.25% increase in medical calls when it is a heatwave vs not 
 
-Further Distributional Parameters:
-      Estimate Est.Error l-95% CI u-95% CI Rhat Bulk_ESS Tail_ESS
-shape    57.51      0.71    56.18    58.93 1.00      912     1492
-
-03/25
-Family: negbinomial 
-  Links: mu = log 
-Formula: n ~ hw + (1 | Zipcode.of.Incident) 
-   Data: overall (Number of observations: 208792) 
-  Draws: 4 chains, each with iter = 500; warmup = 250; thin = 1;
-         total post-warmup draws = 1000
-
-Multilevel Hyperparameters:
-~Zipcode.of.Incident (Number of levels: 25) 
-              Estimate Est.Error l-95% CI u-95% CI Rhat Bulk_ESS Tail_ESS
-sd(Intercept)     0.93      0.13     0.70     1.23 1.15       23       89
-
-Regression Coefficients:
-          Estimate Est.Error l-95% CI u-95% CI Rhat Bulk_ESS Tail_ESS
-Intercept     2.06      0.19     1.75     2.49 1.80        6       13  <- rhat >1
-hwTRUE        0.07      0.00     0.06     0.07 1.01      782      591 
-
-Further Distributional Parameters:
-      Estimate Est.Error l-95% CI u-95% CI Rhat Bulk_ESS Tail_ESS
-shape    57.52      0.74    56.10    59.07 1.01      397      381
-
-
-
 #bayesian model data 
 ```{r}
 bayesian <- readRDS("911_bayesian.rds") 
 summary(fit)
 plot(fit) #i am not entirely sure how to read these graphs 
- 
 
 ```
 
@@ -292,12 +231,6 @@ model1 = casecross(n ~ hw95+AT, #outcome to exposure
                   data = overall_current)
 summary(model1)
 
-model2 = casecross(n ~ hw95 + AT, #exposure to outcome 
-                   matchdow = TRUE, #match days of week to each other
-                   stratamonth = FALSE, #match months to each other
-                  data = overall)
-summary(model2)
-
 ```
 Filtering for  only months 6 - 11 for seasonality 
 Time-stratified case-crossover with months as strata
@@ -308,11 +241,45 @@ Average number of control days per case day 3.4
 
 matching months and dow Parameter Estimates:
                 coef exp(coef)    se(coef)         z     Pr(>|z|)
-hw95TRUE -0.03883745 0.9619071 0.022096266 -1.757648 0.0788074715
+hw95TRUE -0.03883745 0.9619071 0.022096266 -1.757648 0.0788074715 
 AT        0.01310803 1.0131943 0.003452059  3.797164 0.0001463609 
 
-1.31943% 
-From this model, we can confidently say that there is a small chance of medical calls happening when temperature rises. For every 1C (2.54 F) increase in AT, there is a 1.31% chance of medical calls increasing for that day. While this chance/likeliehood may seem small, the model seems to point towards an increase in heat may be related to an increase of medical calls for a particular day whether or not the daily temperature is a heatwave day or not.  
+1.31943% increase in odds ratio 
+
+From this model, we can confidently say that there is a small chance of medical calls happening when temperature rises. For every 1C (2.54 F) increase in AT, there is a 1.31% chance of medical calls increasing for that day. While this chance/likelihood may seem small, the model seems to point towards an increase in heat may be related to an increase of medical calls for a particular day whether or not the daily temperature is a heatwave day or not. 
+
+
+In order to incorporate lag into this time-stratified case cross study, cross basis is used to put everything into a package. 
+```{r}
+# build a cross-basis for apparent temperature including lag
+cb_ATmean <- crossbasis(
+  overall_current$ATmean, #doing mean first, exposure
+  lag = 3,  #based on CDPH, lag i want to include
+  argvar = list(fun = "ns", df = 3),  # exposure response, 3 degrees of freedom
+  arglag = list(fun = "ns", df = 2)   # lag response, 2 degrees of freedom
+)
+
+overall_cbATmean <- cbind(overall_current, cb_ATmean)
+
+# fit the same case-crossover model, replacing AT with the crossbasis
+model_cbMean1 <- glm(n ~ hw + cb_ATmean + factor(strata),
+                     family = poisson(),
+                     data = overall_cbATmean)
+
+pred <- crosspred(cb_ATmean,  
+                  model_cbMean1,
+                  cen = median(overall_cbATmean$ATmean, na.rm = TRUE))
+
+summary(pred)
+
+plot(pred, "overall")
+
+plot(pred, "slices", var = 25)
+```
+
+```{r}
+plot(pred, "slices", var = 25)
+```
 
 
 Time-stratified case-crossover with a stratum length of 28 days
@@ -355,9 +322,8 @@ model_match = casecross(n ~ AT, #outcome to exposure
                    stratamonth = TRUE, #match months to each other 
                    matchconf = 'hw95',
                   data = overall_current) 
-summary(model_match)
+summary(model_match) 
 ```
-
 
 # Case Crossover Design 
 Due to a lack of ability to obtain significant coefficients in (rhat >1), switching over to a casecross design will give insights into whether or not medical incident type calls increases when a heatwave occurs. This does not paint a complete picture in defining a baseline amount of 911 calls as a Bayesian model would. However, this type of study design is useful for looking at overall trends. 
@@ -418,18 +384,18 @@ hw_2017 <- baseline %>%
 ```
 
 ```{r}
-overall <- left_join(
+overall_2017 <- left_join(
   only_2017,
   hw_2017,
   by = c("Call.Date" = "date", "Zipcode.of.Incident" = "zip_code"),
   na_matches = "never"
 ) 
 
-overall <- overall %>% 
+overall_2017 <- overall_2017 %>% 
   mutate(day_abbr = format(as.Date(Call.Date), "%a"), 
          date = Call.Date, #adding day of week to match cases/controls
          stratum_id = interaction(month, day_abbr, drop = TRUE)) %>%  #creating a strata based on dow and month 
-  relocate(tmean, hw95,day_abbr,stratum_id, .after = n) #visual sanity
+  relocate(tmean, hw95,day_abbr,stratum_id, .after = n) #visual sanity 
 
 #mon tue wed thu fri sat sun 
 ```
@@ -460,11 +426,15 @@ Likelihood ratio test=28.1  on 2 df, p=7.913e-07
 n= 10495, number of events= 9403 
 
 ```{r}
-sep_2017 <- overall %>% 
-  filter(month == 9, day_abbr == "Fri") 
+sep_2017 <- overall_2017 %>% 
+  filter(month == 9, day_abbr == "Fri")  
 
-sep_model = casecross(n ~ AT, matchconf = "hw95", data = overall)
-summary(sep_model)
+zipcodes <- sep_2017 %>% 
+  mutate(week = week(Call.Date)) %>% 
+  group_by(week, Zipcode.of.Incident)
+  
+sep_model = casecross(n ~ AT, matchconf = "hw95", data = overall_2017)
+summary(sep_model) 
 
 ```
 Parameter Estimates:
@@ -472,7 +442,7 @@ Parameter Estimates:
 AT 0.01082299  1.010882 0.001658571 6.525492 6.777886e-11 
 
 coefficient = log of exp(coeff)
-exp(coef) = odds ratio --> (1.010882 - 1)*100% = 1.0882% OR 1.09% odds are increases when AT increases by 1
+exp(coef) = odds ratio --> (1.010882 - 1)*100% = 1.0882% OR 1.09% odds are increases when AT increases by 1 
 se(coef) = standard error 
 z = how many standard errors there are away from 0 (farther from 0 is better)
 Pr(>|z|) = p value, very small very good! 
