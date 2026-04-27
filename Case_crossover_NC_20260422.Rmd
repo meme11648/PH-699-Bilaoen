@@ -1,0 +1,381 @@
+---
+title: "Medical Incidents"
+author: "Mahal Bilaoen - Edited by Nancy Carmona"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+pacman::p_load(tidyverse,dplyr,ggplot2,lubridate,brms, data.table, cmdstanr, season, dlnm, splines, survival, gnm)
+ 
+```
+
+04/27 11:00 AM - 11:10 AM - working on tmin analysis 
+
+# Loading data 
+```{r load.data}
+
+# loading in data sets 
+
+# load medical incidents from SFDPH
+medical_incidents <- read.csv("Fire_Department_and_Emergency_Medical_Services_Dispatched_Calls_for_Service_20260309.csv")
+
+# load all current temp data
+daymet_current <- read.csv("daymet_current.csv")
+
+# load 95th percentiles (zip code level) from historical data (30 year normal)
+daymet_p95 <- read.csv("daymet_p95_byZIP.csv")
+
+
+
+```
+
+
+# Calculating AT 
+```{r}
+
+# first make a date column like in previous dataframe and add zero infront of site
+daymet_current$site <- paste0("0", daymet_current$site)
+daymet_p95$site <- as.character(daymet_p95$site)
+
+
+# calculate AT from temp and vp 
+daymet_current <- daymet_current %>%
+  mutate(date = make_date(year = year) + days(yday - 1),
+         month = month(date),
+         apparent_tmin = -1.3 + 0.92*tmin + 2.2*(vp/1000),
+         apparent_tmax = -1.3 + 0.92*tmax + 2.2*(vp/1000),
+         apparent_tmean = (apparent_tmin+apparent_tmax)/2
+         )
+
+
+# merge data sets
+daymet_current_join <- left_join(daymet_current, daymet_p95, by = "zip_code")
+
+# remove duplicate observations
+# Deduplicate by zip
+daymet_heatwaves <- daymet_current_join %>%
+  distinct(zip_code, date, .keep_all = TRUE) 
+
+
+```
+
+# Heatwave events 
+```{r}
+
+#tally heatwave days (above 95th percentile)
+daymet_heatwaves <- daymet_heatwaves %>%
+  filter(month >= 6 & month < 11) %>% #restrict to SF summer dates to avoid seasonal bias
+  mutate(hw = apparent_tmean > p95_tmean) #trying mean now
+daymet_heatwaves$zip_code <- as.character(daymet_heatwaves$zip_code)
+
+daymet_heatwaves <- daymet_heatwaves %>%
+  group_by(site.x, zip_code) %>%
+  mutate(event_id = rleid(hw))
+
+#summarise TRUE runs and 2+ day heatwaves
+hw_events_2day <- daymet_heatwaves %>%
+  filter(hw) %>% #keeps only heatwave days
+  group_by(site.x, event_id, zip_code, year) %>%
+  summarise(
+    duration = n(),
+    start_date = min(date),
+    end_date = max(date),
+    mean_tmean = mean(apparent_tmean),
+    .groups = "drop"
+  ) %>%
+  filter(duration >= 2) # enforce 2+ days
+
+#summarise TRUE runs and 3+ day heatwaves
+hw_events_3day <- daymet_heatwaves %>%
+  filter(hw) %>% #keeps only heatwave days
+  group_by(site.x, event_id, zip_code, year) %>%
+  summarise(
+    duration = n(), #adjust to just "duration" if 
+    start_date = min(date),
+    end_date = max(date),
+    mean_tmean = mean(apparent_tmean),
+    .groups = "drop"
+  ) %>%
+  filter(duration >= 3) # enforce 3+ days
+
+```
+
+
+
+
+
+# Cleaning 911 calls 
+```{r}
+per_day <- medical_incidents |>
+  mutate(Call.Date = mdy(Call.Date)) |>
+  count(Zipcode.of.Incident, Call.Date) 
+
+per_day <- per_day |>
+  mutate(year = year(Call.Date),
+         month = month(Call.Date),
+         Zipcode.of.Incident = as.character(Zipcode.of.Incident)) |>
+  relocate(year, .after = "Call.Date") |> 
+  filter(month >= 6 & month < 11)
+
+#seasonal bias to ONLY track assumed heatwave related days, need to find paper to support this 
+
+#percentile_95 <- quantile(pertest$n, probs = 0.95, na.rm = TRUE)
+#95th percentile is 44 calls for years 2018-2023
+#95th percentile is 45 calls for years 2018-2023 BUT only through the summer months 
+
+```
+
+
+
+
+# Merging AT and 911 dfs
+```{r}
+overall_current <- left_join(
+  per_day,
+  daymet_heatwaves,
+  by = c(
+    "Call.Date" = "date",
+    "Zipcode.of.Incident" = "zip_code",
+    "year" = "year",
+    "month" = "month"
+  ),
+  na_matches = "never"
+)
+
+overall_current <- overall_current %>% 
+  mutate(day_abbr = format(as.Date(Call.Date), "%a"),
+         date = Call.Date, 
+        strata = interaction(month, day_abbr)) #create strata for cross basis
+
+```
+
+## NC: checking over dispersion
+
+We used a conditional Poisson case-crossover model for daily 911 call counts. In these results, the coefficient for "hw" tells you how call counts differ on heat-wave days versus non-heat-wave days. The outcome of interest is a count of 911 models. The model uses a log link and the effects are interpreted as rate ratios after exponentiating coefficients. 
+
+```{r}
+library(dplyr)
+library(lubridate)
+library(gnm)
+library(MASS)
+
+dat <- overall_current %>%
+  mutate(
+    Call.Date = as.Date(Call.Date),
+    year = lubridate::year(Call.Date),
+    month = lubridate::month(Call.Date),
+    dow = lubridate::wday(Call.Date, label = TRUE, abbr = TRUE),
+    hw = as.integer(hw),
+    cc_strata = interaction(Zipcode.of.Incident, year, month, dow, drop = TRUE)
+  )
+
+ fit_p <- gnm(
+  n ~ hw,
+  eliminate = cc_strata,
+  family = poisson(link = "log"),
+  data = dat
+)
+
+pearson_dispersion <- sum(residuals(fit_p, type = "pearson")^2) / df.residual(fit_p)
+deviance_dispersion <- deviance(fit_p) / df.residual(fit_p)
+
+data.frame(
+  pearson_dispersion = pearson_dispersion,
+  deviance_dispersion = deviance_dispersion
+)
+
+
+beta <- coef(fit_p)["hw"]
+se <- sqrt(vcov(fit_p)["hw", "hw"])
+
+data.frame(
+  term = "Heat wave",
+  IRR = exp(beta),
+  LCL = exp(beta - 1.96 * se),
+  UCL = exp(beta + 1.96 * se)
+)
+
+# percent increase
+(1.101841 - 1) * 100
+
+# 10.18% higher 911 call rates on heat-wave days.
+
+
+# 
+c(
+  lower_pct = (1.087843 - 1) * 100,
+  upper_pct = (1.11602 - 1) * 100
+)
+
+
+```
+
+# Results from Basic Model 
+
+In conditional Poisson case-crossover models matched on ZIP code, year, month, and day of week, heat-wave days were associated with higher 911 call counts (IRR = 1.10, 95% CI: 1.09, 1.12). Overall, we find that heat-wave days were associated with a 10.2% increase in 911 calls (95% CI: 8.8% to 11.6%).
+
+
+## Modeling only 1 day lag (no same day heat in model)
+
+Heat-wave exposure on the previous day was also associated with elevated 911 call counts (IRR = 1.07, 95% CI: 1.05, 1.08), suggesting both immediate and short-term delayed effects.
+ 
+```{r}
+
+dat_lag1 <- dat %>%
+  group_by(Zipcode.of.Incident) %>%
+  arrange(Call.Date, .by_group = TRUE) %>%
+  mutate(hw_lag1 = lag(hw, 1)) %>%
+  ungroup()
+
+
+fit_p_lag1 <- gnm(
+  n ~ hw_lag1,
+  eliminate = cc_strata,
+  family = poisson(link = "log"),
+  data = dat_lag1
+)
+
+summary(fit_p_lag1)
+
+beta <- coef(fit_p_lag1)["hw_lag1"]
+se <- sqrt(vcov(fit_p_lag1)["hw_lag1", "hw_lag1"])
+
+data.frame(
+  term = "Heat wave (lag 1 day)",
+  IRR = exp(beta),
+  LCL = exp(beta - 1.96 * se),
+  UCL = exp(beta + 1.96 * se)
+)
+
+```
+
+## Model with same day heat + 1 day lag 
+
+In conditional Poisson case-crossover models matched on ZIP code, year, month, and day of week, same-day heat-wave exposure was associated with higher 911 call counts (IRR = 1.09, 95% CI: 1.07, 1.11), and previous-day heat-wave exposure was also independently associated with an increase in 911 calls (IRR = 1.02, 95% CI: 1.01, 1.04). Most of the increase in 911 calls occurred on the heat-wave day itself, but there is still a small increase the following day.
+
+```{r}
+
+
+dat <- overall_current %>%
+  mutate(
+    Call.Date = as.Date(Call.Date),
+    year = as.integer(format(Call.Date, "%Y")),
+    month = as.integer(format(Call.Date, "%m")),
+    dow = format(Call.Date, "%a"),
+    hw = as.integer(hw),
+    cc_strata = interaction(Zipcode.of.Incident, year, month, dow, drop = TRUE)
+  ) %>%
+  group_by(Zipcode.of.Incident) %>%
+  arrange(Call.Date, .by_group = TRUE) %>%
+  mutate(
+    hw_lag1 = lag(hw, 1)
+  ) %>%
+  ungroup()
+
+fit_lag01 <- gnm(
+  n ~ hw + hw_lag1,
+  eliminate = cc_strata,
+  family = poisson(link = "log"),
+  data = dat
+)
+
+summary(fit_lag01)
+
+beta <- coef(fit_lag01)[c("hw", "hw_lag1")]
+se <- sqrt(diag(vcov(fit_lag01)))[c("hw", "hw_lag1")]
+
+results <- data.frame(
+  term = c("Heat wave (lag 0)", "Heat wave (lag 1)"),
+  IRR = exp(beta),
+  LCL = exp(beta - 1.96 * se),
+  UCL = exp(beta + 1.96 * se)
+)
+
+results
+
+```
+
+#using tmin instead of tmean, creating a new df 
+```{r}
+#tally heatwave days (above 95th percentile)
+tmin_heatwaves <- daymet_heatwaves %>%
+  filter(month >= 6 & month < 11) %>% #restrict to SF summer dates to avoid seasonal bias
+  mutate(hw = apparent_tmin > p95_tmin) #trying mean now
+tmin_heatwaves$zip_code <- as.character(tmin_heatwaves$zip_code) 
+
+tmin_heatwaves <- tmin_heatwaves %>%
+  group_by(site.x, zip_code) %>%
+  mutate(event_id = rleid(hw))
+
+overall_tmin <- left_join(
+  per_day,
+  tmin_heatwaves,
+  by = c(
+    "Call.Date" = "date",
+    "Zipcode.of.Incident" = "zip_code",
+    "year" = "year",
+    "month" = "month"
+  ),
+  na_matches = "never"
+)
+
+overall_tmin <- overall_tmin %>% 
+  mutate(day_abbr = format(as.Date(Call.Date), "%a"),
+         date = Call.Date, 
+        strata = interaction(month, day_abbr)) #create strata for cross basis 
+```
+
+```{r}
+dat_tmin <- overall_tmin %>%
+  mutate(
+    Call.Date = as.Date(Call.Date),
+    year = lubridate::year(Call.Date),
+    month = lubridate::month(Call.Date),
+    dow = lubridate::wday(Call.Date, label = TRUE, abbr = TRUE),
+    hw = as.integer(hw),
+    cc_strata = interaction(Zipcode.of.Incident, year, month, dow, drop = TRUE)
+  )
+
+ fit_min <- gnm(
+  n ~ hw,
+  eliminate = cc_strata,
+  family = poisson(link = "log"),
+  data = dat_tmin
+)
+
+pearson_min_dispersion <- sum(residuals(fit_p, type = "pearson")^2) / df.residual(fit_min)
+deviance_min_dispersion <- deviance(fit_min) / df.residual(fit_min)
+
+data.frame(
+  pearson_dispersion = pearson_dispersion,
+  deviance_dispersion = deviance_dispersion
+)
+
+
+beta <- coef(fit_p)["hw"]
+se <- sqrt(vcov(fit_p)["hw", "hw"])
+
+data.frame(
+  term = "Heat wave",
+  IRR = exp(beta),
+  LCL = exp(beta - 1.96 * se),
+  UCL = exp(beta + 1.96 * se)
+)
+
+# percent increase
+(1.101841 - 1) * 100
+
+# 10.18% higher 911 call rates on heat-wave days.
+
+
+# 
+c(
+  lower_pct = (1.087843 - 1) * 100,
+  upper_pct = (1.11602 - 1) * 100
+)
+
+```
+
