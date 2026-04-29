@@ -14,6 +14,7 @@ pacman::p_load(tidyverse,dplyr,ggplot2,lubridate,brms, data.table, cmdstanr, sea
 
 04/27 11:00 AM - 11:10 AM - working on tmin analysis 
 
+
 # Loading data 
 ```{r load.data}
 
@@ -128,7 +129,15 @@ per_day <- per_day |>
 
 ```
 
+```{r}
+#missingness in the data? 
+huh <- medical_incidents %>%
+  mutate(Call.Date = mdy(Call.Date)) %>%
+  filter(is.na(Zipcode.of.Incident))
 
+334/706993
+#0.000472 calls are missing zipcodes 
+```
 
 
 # Merging AT and 911 dfs
@@ -147,9 +156,19 @@ overall_current <- left_join(
 
 overall_current <- overall_current %>% 
   mutate(day_abbr = format(as.Date(Call.Date), "%a"),
-         date = Call.Date, 
-        strata = interaction(month, day_abbr)) #create strata for cross basis
+         date = Call.Date)
 
+         
+ missingness <- anti_join(
+  per_day,
+  daymet_heatwaves,
+  by = c(
+    "Call.Date" = "date",
+    "Zipcode.of.Incident" = "zip_code",
+    "year" = "year",
+    "month" = "month"
+  ))
+         
 ```
 
 ## NC: checking over dispersion
@@ -169,12 +188,12 @@ dat <- overall_current %>%
     month = lubridate::month(Call.Date),
     dow = lubridate::wday(Call.Date, label = TRUE, abbr = TRUE),
     hw = as.integer(hw),
-    cc_strata = interaction(Zipcode.of.Incident, year, month, dow, drop = TRUE)
+    cc_strata = interaction(Zipcode.of.Incident, year, month, dow, drop = TRUE) 
   )
 
  fit_p <- gnm(
   n ~ hw,
-  eliminate = cc_strata,
+  eliminate = cc_strata, #factor for the model but are not necessarily of interest
   family = poisson(link = "log"),
   data = dat
 )
@@ -298,84 +317,113 @@ results
 
 ```
 
-#using tmin instead of tmean, creating a new df 
+We also want to understand how there could be an increase in medical calls during heatwave events. 
+
+#2+ and 3+ day heatwave events 
 ```{r}
-#tally heatwave days (above 95th percentile)
-tmin_heatwaves <- daymet_heatwaves %>%
-  filter(month >= 6 & month < 11) %>% #restrict to SF summer dates to avoid seasonal bias
-  mutate(hw = apparent_tmin > p95_tmin) #trying mean now
-tmin_heatwaves$zip_code <- as.character(tmin_heatwaves$zip_code) 
+#this can be rearranged to the top of initial data aggregation and cleaning to avoid confusion with select function in MASS package 
 
-tmin_heatwaves <- tmin_heatwaves %>%
-  group_by(site.x, zip_code) %>%
-  mutate(event_id = rleid(hw))
+#adding on 2+ day hw runs
+dat <- dat %>%
+  left_join(
+    hw_events_2day %>%
+      dplyr::select(site.x, event_id, zip_code, year) %>% 
+      mutate(hw_2plus = 1), #identifies when there is a 2+ day hw event
+    by = c("site.x", "event_id", "Zipcode.of.Incident" = "zip_code", "year")
+  ) %>%
+  mutate(hw_2plus = ifelse(is.na(hw_2plus), 0, hw_2plus)) #non 2+ day hw flagged as 0
 
-overall_tmin <- left_join(
-  per_day,
-  tmin_heatwaves,
-  by = c(
-    "Call.Date" = "date",
-    "Zipcode.of.Incident" = "zip_code",
-    "year" = "year",
-    "month" = "month"
-  ),
-  na_matches = "never"
-)
+#adding on 3+ hw runs 
+dat <- dat %>%
+  left_join(
+    hw_events_3day %>%
+      dplyr::select(site.x, event_id, zip_code, year) %>%
+      mutate(hw_3plus = 1), #identifies when there is a 3+ day hw event
+    by = c("site.x", "event_id", "Zipcode.of.Incident" = "zip_code", "year")
+  ) %>%
+  mutate(hw_3plus = ifelse(is.na(hw_3plus), 0, hw_3plus)) #non 3+ day hw flagged as 0 
 
-overall_tmin <- overall_tmin %>% 
-  mutate(day_abbr = format(as.Date(Call.Date), "%a"),
-         date = Call.Date, 
-        strata = interaction(month, day_abbr)) #create strata for cross basis 
 ```
 
+When looking at heatwave events of 2 or more heatwave days, 911 calls are expected to increase by 10.74% than on non-heatwave days. 
+#2 day hw runs
 ```{r}
-dat_tmin <- overall_tmin %>%
-  mutate(
-    Call.Date = as.Date(Call.Date),
-    year = lubridate::year(Call.Date),
-    month = lubridate::month(Call.Date),
-    dow = lubridate::wday(Call.Date, label = TRUE, abbr = TRUE),
-    hw = as.integer(hw),
-    cc_strata = interaction(Zipcode.of.Incident, year, month, dow, drop = TRUE)
-  )
-
- fit_min <- gnm(
-  n ~ hw,
-  eliminate = cc_strata,
+fit_2day <- gnm(
+  n ~ hw_2plus,
+  eliminate = cc_strata, #factor for the model but are not necessarily of interest
   family = poisson(link = "log"),
-  data = dat_tmin
+  data = dat
 )
 
-pearson_min_dispersion <- sum(residuals(fit_p, type = "pearson")^2) / df.residual(fit_min)
-deviance_min_dispersion <- deviance(fit_min) / df.residual(fit_min)
+pearson_2_dispersion <- sum(residuals(fit_2day, type = "pearson")^2) / df.residual(fit_2day)
+deviance_2_dispersion <- deviance(fit_2day) / df.residual(fit_2day)
 
 data.frame(
-  pearson_dispersion = pearson_dispersion,
-  deviance_dispersion = deviance_dispersion
+  pearson_dispersion = pearson_2_dispersion, 
+  deviance_dispersion = deviance_2_dispersion
 )
 
-
-beta <- coef(fit_p)["hw"]
-se <- sqrt(vcov(fit_p)["hw", "hw"])
+beta_2day <- coef(fit_2day)["hw_2plus"]
+se_2day <- sqrt(vcov(fit_2day)["hw_2plus", "hw_2plus"])
 
 data.frame(
-  term = "Heat wave",
-  IRR = exp(beta),
-  LCL = exp(beta - 1.96 * se),
-  UCL = exp(beta + 1.96 * se)
+  term = "2 Day Heat wave",
+  IRR = exp(beta_2day),
+  LCL = exp(beta_2day - 1.96 * se_2day),
+  UCL = exp(beta_2day + 1.96 * se_2day)
 )
 
 # percent increase
-(1.101841 - 1) * 100
+(1.107448 - 1) * 100
 
-# 10.18% higher 911 call rates on heat-wave days.
+# 10.74% higher 911 call rates on 2+ heat-wave days.
 
 
 # 
 c(
-  lower_pct = (1.087843 - 1) * 100,
-  upper_pct = (1.11602 - 1) * 100
+  lower_pct = (1.092522 - 1) * 100,
+  upper_pct = (1.122579 - 1) * 100
+)
+```
+
+#3 day hw runs
+```{r}
+fit_3day <- gnm(
+  n ~ hw_3plus,
+  eliminate = cc_strata, #factor for the model but are not necessarily of interest
+  family = poisson(link = "log"),
+  data = dat
 )
 
+pearson_3_dispersion <- sum(residuals(fit_3day, type = "pearson")^2) / df.residual(fit_3day)
+deviance_3_dispersion <- deviance(fit_3day) / df.residual(fit_3day)
+
+data.frame(
+  pearson_dispersion = pearson_3_dispersion,
+  deviance_dispersion = deviance_3_dispersion
+)
+
+beta_3day <- coef(fit_3day)["hw_3plus"]
+se_3day <- sqrt(vcov(fit_3day)["hw_3plus", "hw_3plus"])
+
+data.frame(
+  term = "Heat wave",
+  IRR = exp(beta_3day),
+  LCL = exp(beta_3day - 1.96 * se_3day),
+  UCL = exp(beta_3day + 1.96 * se_3day)
+)
+
+# percent increase
+(1.106922 - 1) * 100
+
+# 10.69% higher 911 call rates on 2+ heat-wave days.
+
+
+# 
+c(
+  lower_pct = (1.089906 - 1) * 100, #8.99%
+  upper_pct = (1.124203 - 1) * 100) #12.42
+
 ```
+
 
