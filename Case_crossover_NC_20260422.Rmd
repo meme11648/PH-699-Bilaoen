@@ -458,6 +458,10 @@ results_2plus_1lag <- data.frame(
   ) 
 
 results_2plus_1lag
+
+(1.102792 - 1) * 100 
+(1.006414	- 1) * 100 
+#0.64.14% increase in calls 1 day lag 
 ```
 
 ```{r}
@@ -480,7 +484,8 @@ results_3plus_1lag <- data.frame(
 
 results_3plus_1lag
 
-
+(1.001023 - 1) * 100 
+#0.1023% increase in calls for 1 day lag
 ```
 
 next steps:  
