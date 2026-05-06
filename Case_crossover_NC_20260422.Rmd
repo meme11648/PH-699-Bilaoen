@@ -26,8 +26,6 @@ daymet_current <- read.csv("daymet_current.csv")
 # load 95th percentiles (zip code level) from historical data (30 year normal)
 daymet_p95 <- read.csv("daymet_p95_byZIP.csv")
 
-
-
 ```
 
 
@@ -152,17 +150,6 @@ overall_current <- left_join(
 overall_current <- overall_current %>% 
   mutate(day_abbr = format(as.Date(Call.Date), "%a"),
          date = Call.Date)
-
-         
- missingness <- anti_join(
-  per_day,
-  daymet_heatwaves,
-  by = c(
-    "Call.Date" = "date",
-    "Zipcode.of.Incident" = "zip_code",
-    "year" = "year",
-    "month" = "month"
-  ))
          
 ```
 
@@ -284,12 +271,14 @@ dat <- overall_current %>%
   group_by(Zipcode.of.Incident) %>%
   arrange(Call.Date, .by_group = TRUE) %>%
   mutate(
-    hw_lag1 = lag(hw, 1)
+    hw_lag1 = lag(hw, 1),
+    hw_lag2 = lag(hw, 2),
+    hw_lag3 = lag(hw, 3)
   ) %>%
   ungroup()
 
 fit_lag01 <- gnm(
-  n ~ hw + hw_lag1,
+  n ~ hw + hw_lag1 + hw_lag2 + hw_lag3,
   eliminate = cc_strata,
   family = poisson(link = "log"),
   data = dat
@@ -297,11 +286,11 @@ fit_lag01 <- gnm(
 
 summary(fit_lag01)
 
-beta <- coef(fit_lag01)[c("hw", "hw_lag1")]
-se <- sqrt(diag(vcov(fit_lag01)))[c("hw", "hw_lag1")]
+beta <- coef(fit_lag01)[c("hw", "hw_lag1", "hw_lag2", "hw_lag3")]
+se <- sqrt(diag(vcov(fit_lag01)))[c("hw", "hw_lag1", "hw_lag2", "hw_lag3")]
 
 results <- data.frame(
-  term = c("Heat wave (lag 0)", "Heat wave (lag 1)"),
+  term = c("Heat wave (lag 0)", "Heat wave (lag 1)", "Heat wave (lag 2)", "Heat wave (lag 3)"),
   IRR = exp(beta),
   LCL = exp(beta - 1.96 * se),
   UCL = exp(beta + 1.96 * se)
@@ -316,29 +305,29 @@ We also want to understand how there could be an increase in medical calls durin
 #2+ and 3+ day heatwave events 
 ```{r}
 #this can be rearranged to the top of initial data aggregation and cleaning to avoid confusion with select function in MASS package 
+#idk why but something is wrong here where it will run 50% of the time without error
 
 #adding on 2+ day hw runs
 dat <- dat %>%
   left_join(
     hw_events_2day %>%
       dplyr::select(site.x, event_id, zip_code, year) %>% 
-      dplyr::mutate(hw_2plus = 1), #identifies when there is a 2+ day hw event
+      mutate(hw_2plus = 1L), #identifies when there is a 2+ day hw event
     by = c("site.x", "event_id", "Zipcode.of.Incident" = "zip_code", "year")
   ) %>%
-  mutate(hw_2plus = ifelse(is.na(hw_2plus), 0, hw_2plus)) #non 2+ day hw flagged as 0 
+  mutate(hw_2plus = coalesce(hw_2plus, 0L)) #non 2+ day hw flagged as 0 
 
 #adding on 3+ hw runs 
 dat <- dat %>%
   left_join(
     hw_events_3day %>%
       dplyr::select(site.x, event_id, zip_code, year) %>%
-      dplyr::mutate(hw_3plus = 1), #identifies when there is a 3+ day hw event
+      dplyr::mutate(hw_3plus = 1L), #identifies when there is a 3+ day hw event
     by = c("site.x", "event_id", "Zipcode.of.Incident" = "zip_code", "year")
   ) %>%
-  mutate(hw_3plus = ifelse(is.na(hw_3plus), 0, hw_3plus)) #non 3+ day hw flagged as 0 
+  mutate(hw_3plus = coalesce(hw_3plus, 0L)) #non 3+ day hw flagged as 0 
 
 ```
-
 
 When looking at heatwave events of 2 or more heatwave days, 911 calls are expected to increase by 10.74% than on non-heatwave days. 
 #2 day hw runs
@@ -372,7 +361,6 @@ data.frame(
 (1.107448 - 1) * 100
 
 # 10.74% higher 911 call rates on 2+ heat-wave days.
-
 
 # 
 c(
@@ -419,21 +407,27 @@ c(
   upper_pct = (1.124203 - 1) * 100) #12.42
 ```
 
+#creating lag for 2+ and 3+ heat wave events 
 ```{r}
 dat <- dat %>%
   group_by(Zipcode.of.Incident) %>%
   arrange(Call.Date, .by_group = TRUE) %>%
   mutate(
-    hw_2plus_lag1 = lag(hw_2plus, 1),
-    hw_3plus_lag1 = lag(hw_3plus, 1)
+    hw2_lag1 = lag(hw_2plus, 1),
+    hw2_lag2 = lag(hw_2plus, 2),
+    hw2_lag3 = lag(hw_2plus, 3),
+    hw3_lag1 = lag(hw_3plus, 1),
+    hw3_lag2 = lag(hw_3plus, 2),
+    hw3_lag3 = lag(hw_3plus, 3),
   ) %>%
   ungroup()
 
 ```
 
+#2+ heatwaves with lag
 ```{r}
 fit_lag2 <- gnm(
-  n ~ hw_2plus + hw_2plus_lag1,
+  n ~ hw_2plus + hw2_lag1 + hw2_lag2 + hw2_lag3,
   eliminate = cc_strata,
   family = poisson(link = "log"),
   data = dat,
@@ -444,14 +438,16 @@ summary(fit_lag2)
 
 #tidy function should work???
 
-terms_needed <- c("hw_2plus", "hw_2plus_lag1")
+terms_needed <- c("hw_2plus", "hw2_lag1","hw2_lag2","hw2_lag3")
 
 beta_2plus_1lag <- coef(fit_lag2)[terms_needed]
 se_2plus_1lag <- sqrt(diag(vcov(fit_lag2)))[terms_needed]
 
 results_2plus_1lag <- data.frame(
-  term = c("2 plus Heat wave (lag 0)", "2 plus Heat wave (lag 1)"),
-  #term = c(beta_2plus_1lag, se_2plus_1lag)
+  term = c("2 Day Heat wave (lag 0)", 
+           "2 Day Heat wave (lag 1)", 
+           "2 Day Heat wave (lag 2)",
+           "2 Day Heat wave (lag 3)"),
   IRR = exp(beta_2plus_1lag),
   LCL = exp(beta_2plus_1lag - 1.96 * se_2plus_1lag),
   UCL = exp(beta_2plus_1lag + 1.96 * se_2plus_1lag)
@@ -459,24 +455,29 @@ results_2plus_1lag <- data.frame(
 
 results_2plus_1lag
 
-(1.102792 - 1) * 100 
-(1.006414	- 1) * 100 
+(1.102792 - 1) * 100 #day 0
+(1.006414	- 1) * 100 #day 1 
+(1.012288	- 1) * 100 #day 2 
 #0.64.14% increase in calls 1 day lag 
 ```
 
+#3+ heatwaves with lag
 ```{r}
 fit_lag3 <- gnm(
-  n ~ hw_3plus + hw_3plus_lag1,
+  n ~ hw_3plus + hw3_lag1 + hw3_lag2 + hw3_lag3,
   eliminate = cc_strata,
   family = poisson(link = "log"),
   data = dat
 )
 
-beta_3plus_1lag <- coef(fit_lag3)[c("hw_3plus", "hw_3plus_lag1")]
-se_3plus_1lag <- sqrt(diag(vcov(fit_lag3)))[c("hw_3plus", "hw_3plus_lag1")]
+beta_3plus_1lag <- coef(fit_lag3)[c("hw_3plus", "hw3_lag1","hw3_lag2","hw3_lag3")]
+se_3plus_1lag <- sqrt(diag(vcov(fit_lag3)))[c("hw_3plus", "hw3_lag1","hw3_lag2","hw3_lag3")]
 
 results_3plus_1lag <- data.frame(
-  term = c("3 Day Heat wave (lag 0)", "3 Day Heat wave (lag 1)"),
+  term = c("3 Day Heat wave (lag 0)", 
+           "3 Day Heat wave (lag 1)",
+           "3 Day Heat wave (lag 2)",
+           "3 Day Heat wave (lag 3)"),
   IRR = exp(beta_3plus_1lag),
   LCL = exp(beta_3plus_1lag - 1.96 * se_3plus_1lag),
   UCL = exp(beta_3plus_1lag + 1.96 * se_3plus_1lag)
@@ -484,12 +485,18 @@ results_3plus_1lag <- data.frame(
 
 results_3plus_1lag
 
-(1.001023 - 1) * 100 
+(1.001023 - 1) * 100 #day 0 
+(1.0132920 - 1) * 100 #day 1
 #0.1023% increase in calls for 1 day lag
 ```
+
+#Sensitivity Analysis ATmin 
+Existing literature suggests that calls between different definitions of heat (minimum, mean, maxium), which affects the types of analysis being conducted (looking at general trends vs what would realistically happen to a human being). 
 
 next steps:  
 look at lag for all events 
 - different exposure methods 
-  - what does it look like in terms of volume for medical calls on a lag AFTER an event or lag during event (day 1 event, day 2 event, etc)
+
+05/06
+look at difference with AT_min 
 
