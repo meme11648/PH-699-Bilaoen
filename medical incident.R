@@ -1,11 +1,3 @@
----
-title: "Medical Incidents"
-author: "Mahal Bilaoen"
-date: "`r Sys.Date()`"
-output: html_document
----
-
-```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 
 pacman::p_load(tidyverse,dplyr,ggplot2,lubridate,brms, data.table, cmdstanr, dlnm, splines, survival)
@@ -14,35 +6,7 @@ pacman::p_load(tidyverse,dplyr,ggplot2,lubridate,brms, data.table, cmdstanr, dln
 # install.packages("remotes")
 # remotes::install_github("stan-dev/cmdstanr")
 
-```
 
-04/22 10 am take a deeper dive at crossbasis model --> how does this look for heatwave events before and after (ex sep 2017)
-      #need to double check for problems when at home 
-      need to write a white paper 
-      #need to do p95 per zipcode, another variable to also include 
-      #make a casecross that does 2 day hw events / 3 
-      #check if variance = mean -> if not change the family 
-        https://www.rdocumentation.org/packages/stats/versions/3.6.2/topics/family 
-      # gnm function --> poisson 
-      #different case crosses between svi groups, Percentage of People under 150% Poverty, Unemployment Rate, Land Cover Intensity, Percent in Group Quarters, Percent Housing Cost Burdened
-
-## Bayesian modeling 
-
-In an attempt to understand which neighborhoods are potentially the most vulnerable due to heatwaves, I will be utilizing a bayesian linear regression model to use medical incidents as a proxy for vulnerability. The goal is to understand where there are the least air conditioning resources are available to people based on medical incidents, assuming that people who are calling in are in dire need of medical care due to heat. 
-
-## Hypothesis: There are more medical incident 911 calls on heatwave days than on non heatwave days. 
-
-independent - heat / temperature 
-dependent - phone calls / medical incidents 
-confounding (?) - indoor heat / location of the city 
-
-It should be noted that this is only looking at calls on heatwave days, and clearer data on the type of medical incident days after a heatwave may be more inclusive of heatwave related injuries/exposure. Given that the public data is vague, we can only make inferences about the types of 911 medical incident calls being made. Other literature states that they included data that were not directly related to heat, as heat can exacerbate present illness/issues that people may be experiencing. If there was clearer available on the reasoning for the call, then there wouldn't be as deep of a model utilized here. 
-
-#methods
-In order to determine if the hypothesis is true, I will be utilizing the brm function from the "brms" package to determine a baseline of medical incidents. Using a bayesian model will help determine the likelihood/probability of medical incidents happening during a heatwave vs not a heatwave to get a baseline idea of how many 911 calls are happening. Using a 5 year period to test this information was used due to limited computational abilities. If a 20 year analysis could be completed that would the most ideal. 
-
-#loading in data 
-```{r}
 #loading in data sets 
 #medical incidents 
 medical_incidents <- read.csv("Fire_Department_and_Emergency_Medical_Services_Dispatched_Calls_for_Service_20260309.csv")
@@ -51,10 +15,7 @@ daymet_current <- read.csv("daymet_current.csv")
 
 daymet_p95_byZIP <- read.csv("daymet_p95_byZIP.csv")
 
-```
 
-#cleaning 911 calls 
-```{r}
 per_day <- medical_incidents |>
   mutate(Call.Date = mdy(Call.Date)) |>
   count(Zipcode.of.Incident, Call.Date)
@@ -67,10 +28,7 @@ per_day <- per_day |>
 
 #seasonal bias to ONLY track assumed heatwave related days, need to find paper to support this 
 
-```
 
-#calculating apparent temperature
-```{r}
 # first make a date column like in previous dataframe and add zero infront of site
 daymet_current$site <- paste0("0", daymet_current$site)
 daymet_p95_byZIP$site <- as.character(daymet_p95_byZIP$site)
@@ -93,10 +51,7 @@ daymet_current_join <- left_join(daymet_current, daymet_p95, by = "zip_code")
 # Deduplicate by zip
 daymet_heatwaves <- daymet_current_join %>%
   distinct(zip_code, date, .keep_all = TRUE) 
-```
 
-#defining heat wave events 
-```{r}
 #tally heatwave days (above 95th percentile)
 daymet_heatwaves <- daymet_heatwaves %>%
   filter(month >= 6 & month < 11) %>% #restrict to SF summer dates to avoid seasonal bias
@@ -133,10 +88,7 @@ hw_events_3day <- daymet_heatwaves %>%
   ) %>%
   filter(duration >= 3) # enforce 3+ days
 
-```
 
-#merging AT and 911 dfs
-```{r}
 
 per_day <- per_day %>% 
   mutate(Zipcode.of.Incident = as.character(Zipcode.of.Incident))
@@ -155,16 +107,9 @@ overall_current <- overall_current %>%
   mutate(day_abbr = format(as.Date(Call.Date), "%a"),
          date = Call.Date,
          )
-```
 
-#bayesian model for at and 911 calls 
-need to also consider lag 
-
-For more information about the brms package: 
-https://mspeekenbrink.github.io/sdam-r-companion/bayesian-estimation-with-brms.html 
-```{r}
 library(cmdstanr)
-install_cmdstan()
+#install_cmdstan()
 set_cmdstan_path(path = NULL)
 
 fit <- brm(
@@ -192,41 +137,12 @@ saveRDS(fit, "050626_bayesian.rds")
 
 #bayesian <- readRDS("post_bayesian.rds") 
 
-```
-04/01 - this is not a funny joke ;_;
- Family: negbinomial 
-  Links: mu = log 
-Formula: n ~ hw + (1 | Zipcode.of.Incident) 
-   Data: overall (Number of observations: 208792) 
-  Draws: 4 chains, each with iter = 2000; warmup = 1000; thin = 1;
-         total post-warmup draws = 4000
 
-Multilevel Hyperparameters:
-~Zipcode.of.Incident (Number of levels: 25) 
-              Estimate Est.Error l-95% CI u-95% CI Rhat Bulk_ESS Tail_ESS
-sd(Intercept)     0.96      0.15     0.73     1.31 1.03      113      145 
-sd = standard deviation, e^0.96 = 2.61 --> how many times a baseline can be different per zipcode   
-
-Regression Coefficients:
-          Estimate Est.Error l-95% CI u-95% CI Rhat Bulk_ESS Tail_ESS
-Intercept     2.11      0.22     1.72     2.55 1.20       14      118 ->rhat still too high 
-hwTRUE        0.07      0.00     0.06     0.07 1.00     2346     1739  
-
-intercecpt = expected baseline call on a NON-hw day, e^2.11 = 8.25 calls per zipcode expected 
-
-estimate = 0.07 --> e^0.07 = 1.072 --> (1.072-1)*100% = 7.25% increase in medical calls when it is a heatwave vs not 
-
-#bayesian model data 
-```{r, include=FALSE}
 # bayesian <- readRDS("911_bayesian.rds") 
 summary(fit)
 plot(fit) #i am not entirely sure how to read these graphs 
 
-```
 
-```{r}
 
 knitr::purl(input = "medical incidents.Rmd", output = "medical incident.R",documentation = 0)
-
-```
 
