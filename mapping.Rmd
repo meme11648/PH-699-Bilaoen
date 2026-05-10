@@ -1,0 +1,269 @@
+---
+title: "mapping"
+author: "Mahal Bilaoen"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+pacman::p_load(tidyverse,dplyr,ggplot2,sf,tmap, tibble, patchwork,tigris, data.table)
+```
+
+#reading in data 
+```{r}
+svi <- read.csv("SVI_2022_Census_Tract.csv")
+daymet_current <- read.csv("daymet_current.csv")
+daymet_p95 <- read.csv("daymet_p95_byCENSUS.csv")
+```
+
+#reading in shapefile
+```{r}
+shapefile_path <- "C:/Users/meme1/OneDrive/Documents/PH 699 Bilaoen/Census Tract shp"
+
+shape_data <- st_read(shapefile_path)
+
+shape_data <- shape_data %>% 
+  filter(aland > 0, #land area only
+         st_coordinates(st_centroid(geometry))[,1] > -123) #removes weird water tracts 
+
+#head(shape_data)
+
+#plot(shape_data["geometry"])
+```
+
+#filtering for SF svi 
+```{r}
+#filtering through SVI data for san francisco county only, renaming FIPS to site to match centroids, removing other CA related labels 
+svi <- svi %>% 
+  filter(COUNTY == "San Francisco County") %>% 
+  rename(site = FIPS) %>% 
+  dplyr::select(where(~ !is.character(.))) %>% 
+  dplyr::select(-ST, -STCNTY) %>% 
+  filter(site != "6075980401")
+
+#according to SVI documentation, a number of -999 means that there was no data available or the data was NULL 
+svi <- svi %>% 
+  mutate(
+    RPL_THEMES = na_if(RPL_THEMES,-999), 
+    RPL_THEME1 = na_if(RPL_THEME1, -999), 
+    RPL_THEME2 = na_if(RPL_THEME2, -999), 
+    RPL_THEME3 = na_if(RPL_THEME3, -999), 
+    RPL_THEME4 = na_if(RPL_THEME4, -999)) %>%
+  dplyr::select(site,RPL_THEMES,RPL_THEME1,RPL_THEME2,RPL_THEME3,RPL_THEME4) 
+```
+
+#Calculating AT 
+```{r}
+daymet_p95$site <- as.character(daymet_p95$site)
+daymet_current$site <- as.character(daymet_current$site)
+
+
+# calculate AT from temp and vp 
+daymet_current <- daymet_current %>%
+  mutate(date = make_date(year = year) + days(yday - 1),
+         month = month(date),
+         apparent_tmin = -1.3 + 0.92*tmin + 2.2*(vp/1000),
+         apparent_tmax = -1.3 + 0.92*tmax + 2.2*(vp/1000),
+         apparent_tmean = (apparent_tmin+apparent_tmax)/2
+         )
+
+# merge data sets
+daymet_current_join <- left_join(daymet_current, daymet_p95, by = "site")
+
+# remove duplicate observations
+# Deduplicate by census tracs
+daymet_heatwaves <- daymet_current_join %>%
+  distinct(site, date, .keep_all = TRUE) 
+```
+
+#calculating 2+ and 3+ day events 
+```{r}
+
+#tally heatwave days (above 95th percentile)
+daymet_heatwaves <- daymet_heatwaves %>%
+  #filter(month >= 6 & month < 11) %>% #restrict to SF summer dates to avoid seasonal bias
+  mutate(hw = apparent_tmin > p95_min) #trying mean now
+daymet_heatwaves$zip_code <- as.character(daymet_heatwaves$zip_code)
+
+daymet_heatwaves <- daymet_heatwaves %>%
+  group_by(site) %>%
+  mutate(event_id = rleid(hw))
+
+#summarise TRUE runs and 2+ day heatwaves
+hw_events_2day <- daymet_heatwaves %>%
+  filter(hw) %>% #keeps only heatwave days
+  group_by(site, event_id, year) %>%
+  summarise(
+    duration = n(),
+    start_date = min(date),
+    end_date = max(date),
+    mean_tmin = mean(apparent_tmin),
+    .groups = "drop"
+  ) %>%
+  filter(duration >= 2) # enforce 2+ days
+
+#summarise TRUE runs and 3+ day heatwaves
+hw_events_3day <- daymet_heatwaves %>%
+  filter(hw) %>% #keeps only heatwave days
+  group_by(site, event_id, year) %>%
+  summarise(
+    duration = n(), #adjust to just "duration" if 
+    start_date = min(date),
+    end_date = max(date),
+    mean_tmin = mean(apparent_tmin),
+    .groups = "drop"
+  ) %>%
+  filter(duration >= 3) # enforce 3+ days
+```
+
+#yrly hw events
+```{r}
+hw_yearly_3day <- hw_events_3day %>%
+  mutate(year = lubridate::year(start_date)) %>%
+  group_by(site, year) %>%
+  summarise(
+    #n_events = n(),
+    total_hw_days = sum(duration),
+    #total_hw_events = sum(n_events),
+    #avg_duration = mean(duration),
+    #max_duration = max(duration),
+    yrly_meantmin = mean(mean_tmin),
+    .groups = "drop"
+  )
+
+hw_yearly_2day <- hw_events_2day %>%
+  mutate(year = lubridate::year(start_date)) %>%
+  group_by(site, year) %>%
+  summarise(
+    #n_events = n(),
+    total_hw_days = sum(duration),
+    #total_hw_events = sum(n_events),
+    #avg_duration = mean(duration),
+    #max_duration = max(duration),
+    yrly_meantmin = mean(mean_tmin),
+    .groups = "drop"
+  )
+
+hw_2day_occurences <- hw_yearly_2day %>% 
+  group_by(site) %>% 
+  summarize(
+    mean_hw_2day = mean(total_hw_days))
+```
+
+
+```{r}
+svi$site <- as.character(svi$site)
+
+svi_heat <- left_join(svi,hw_2day_occurences, by = "site") 
+
+svi_heat <- svi_heat %>% 
+  ungroup() %>% 
+  mutate(
+    site = paste0("0", site),
+    svi_quartile = ntile(RPL_THEMES, 4),     # Q1 = least vulnerable, Q4 = most 
+    heat_quartile = ntile(mean_hw_2day, 4))      # Q1 = least vulnerable, Q5 = most 
+```
+
+```{r}
+
+svi_shp <- left_join(svi_heat,shape_data, by = c("site" = "geoid"))
+
+tracts_bivar_all <- svi_shp %>% 
+  pivot_longer( 
+    cols = starts_with("mean_hw_"),  # e.g., mean_hw_2day_85, etc. 
+    names_to = "definition", 
+    values_to = "heat_value" 
+  ) 
+
+tracts_bivar_all <- tracts_bivar_all %>% 
+  mutate( 
+    bivar_class = paste0(svi_quartile, "-", heat_quartile) 
+  )
+
+tracts_bivar_all <- tracts_bivar_all %>% 
+  mutate(definition = recode(definition, 
+    "mean_hw_2day"   = "2-Day ≥ 95th", 
+    #"mean_hw_3"   = "3-Day ≥ 97.5th", 
+  )) %>%  
+  filter(definition == "2-Day ≥ 95th") #only looking at one heatwave definition 
+```
+
+```{r}
+
+tracts_bivar_all <- st_as_sf(tracts_bivar_all)
+
+# Use the same bivar_palette you used in the map 
+
+bivar_palette <- c( 
+  "1-1" = "#f2f0f7", "1-2" = "#cbc9e2", "1-3" = "#9e9ac8", "1-4" = "#756bb1", 
+  "2-1" = "#e7d4e8", "2-2" = "#d1b9d8", "2-3" = "#b39dd0", "2-4" = "#8e6cbf", 
+  "3-1" = "#fbb4b9", "3-2" = "#f768a1", "3-3" = "#dd3497", "3-4" = "#ae017e", 
+  "4-1" = "#fcae91", "4-2" = "#fb6a4a", "4-3" = "#ef3b2c", "4-4" = "#99000d" 
+) 
+
+# Create 4x4 grid 
+
+bivar_legend_df <- expand.grid( 
+  svi_q = 1:4, 
+  heat_q = 1:4 
+) %>% 
+  mutate( 
+    bivar_class = paste0(svi_q, "-", heat_q), 
+    fill = bivar_class  # match to your map's fill values 
+  ) 
+
+
+bivar_legend <- ggplot(bivar_legend_df, aes(x = heat_q, y = svi_q, fill = bivar_class)) + 
+  geom_tile() + 
+  scale_fill_manual(values = bivar_palette, guide = "none") + 
+  scale_x_continuous( 
+    breaks = 1:4, 
+    labels = c("Low", "", "", "High"), 
+    expand = c(0, 0) 
+  ) + 
+  scale_y_continuous( 
+    breaks = 1:4, 
+    labels = c("Low", "", "", "High"), 
+    expand = c(0, 0) 
+  ) + 
+  labs(x = "Heatwave Exposure", y = "Social Vulnerability") + 
+  coord_fixed() + 
+  theme_minimal() + 
+  theme( 
+    axis.title = element_text(size = 8, face = "bold"), 
+    axis.text = element_text(size = 8), 
+    panel.grid = element_blank(), 
+    plot.margin = margin(2, 2, 2, 2) 
+  ) 
+
+ 
+main_map <- ggplot(tracts_bivar_all) + 
+  geom_sf(aes(fill = bivar_class), color = "white", size = 0.2) + 
+  scale_fill_manual(values = bivar_palette, guide = "none") + # legend removed 
+
+# if you want to facet wrap facet_wrap(~ definition, ncol = 2) + 
+
+  labs( 
+    title = "Bivariate Map of Social Vulnerability and Heat Exposure from 2018-2023", 
+    subtitle = "Quartile Classification of SVI and Heatwave Metrics, Census Tract Level",   
+    #caption = "Figure 2" 
+    ) + 
+  theme_void() + 
+  theme( 
+    plot.title = element_text(face = "bold", hjust = 0.5), 
+    strip.text = element_text(face = "bold", size = 12, hjust = 0.5), 
+    plot.caption = element_text(size = 8, face = "italic", hjust = 0.5, margin = margin(b=10)), plot.margin = margin(r=10) 
+  ) 
+
+final_plot <- main_map +  
+  inset_element(bivar_legend, left = -0.5, bottom = 0.02, right = 0.25, top = 0.25) 
+
+
+print(final_plot) 
+```
+```{r}
+ggsave("Svi_Heat_2018_2023_Census.png", plot = final_plot, width = 9, height = 6, dpi = 300)
+```
+

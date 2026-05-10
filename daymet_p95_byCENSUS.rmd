@@ -1,0 +1,41 @@
+title: p95_by_CENSUS
+author: Mahal Bilaoen
+date: `r Sys.Date()`
+output: html_document
+---
+
+```{r}
+knitr::opts_chunk$set(echo = TRUE)
+rm(list=ls()) #clear environment
+knitr::opts_chunk$set(echo = TRUE)
+pacman::p_load(sf ,tigris, dplyr ,tidyr, tidycensus, tidyverse, lubridate, heatwaveR)
+```
+
+#reading in baseline data
+```{r}
+daymet_baseline <- read.csv("daymet_baseline.csv")
+```
+
+#95th percentile baseline value by census tract
+```{r}
+#alter date to yyyy-mm-dd format
+daymet_baseline <- daymet_baseline %>%
+  mutate(date = (make_date(year = year) + days(yday - 1)),
+         vp_kp = vp/1000,
+         tmean = (tmin + tmax) / 2,
+         AT_mean = -1.3 + 0.92 * tmean + 2.2 * vp_kp,
+         AT_min = -1.3 + 0.92 * tmin + 2.2 * vp_kp,
+         AT_max = -1.3 + 0.92 * tmax + 2.2 * vp_kp,
+         )
+daymet_p95_byCENSUS <- daymet_baseline %>%
+  group_by(site) %>%
+  summarise(
+    p95_mean = quantile(AT_mean, 0.95, na.rm = TRUE),
+    p95_min = quantile(AT_min, 0.95, na.rm = TRUE),
+    p95_max = quantile(AT_max, 0.95,na.rm = TRUE),
+    .groups = "drop"
+  )
+
+write.csv(daymet_p95_byCENSUS, "daymet_p95_byCENSUS.csv", row.names = FALSE)
+```
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
