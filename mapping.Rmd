@@ -13,8 +13,13 @@ pacman::p_load(tidyverse,dplyr,ggplot2,sf,tmap, tibble, patchwork,tigris, data.t
 
 #reading in data 
 ```{r}
+#all svi data 
 svi <- read.csv("SVI_2022_Census_Tract.csv")
+
+#2018-23 temperature data
 daymet_current <- read.csv("daymet_current.csv")
+
+#p95 by census tract, done separately from zip code level data for accuracy
 daymet_p95 <- read.csv("daymet_p95_byCENSUS.csv")
 ```
 
@@ -26,7 +31,7 @@ shape_data <- st_read(shapefile_path)
 
 shape_data <- shape_data %>% 
   filter(aland > 0, #land area only
-         st_coordinates(st_centroid(geometry))[,1] > -123) #removes weird water tracts 
+         st_coordinates(st_centroid(geometry))[,1] > -123) #removes weird water tracts, not perfect
 
 #head(shape_data)
 
@@ -54,7 +59,7 @@ svi <- svi %>%
   dplyr::select(site,RPL_THEMES,RPL_THEME1,RPL_THEME2,RPL_THEME3,RPL_THEME4) 
 ```
 
-#Calculating AT 
+#Calculating AT
 ```{r}
 daymet_p95$site <- as.character(daymet_p95$site)
 daymet_current$site <- as.character(daymet_current$site)
@@ -78,13 +83,13 @@ daymet_heatwaves <- daymet_current_join %>%
   distinct(site, date, .keep_all = TRUE) 
 ```
 
-#calculating 2+ and 3+ day events 
+#calculating 2+ day events 
+- using only 2 day events for base idea/concept, can be changed to 3 day if needed 
 ```{r}
 
 #tally heatwave days (above 95th percentile)
 daymet_heatwaves <- daymet_heatwaves %>%
-  #filter(month >= 6 & month < 11) %>% #restrict to SF summer dates to avoid seasonal bias
-  mutate(hw = apparent_tmin > p95_min) #trying mean now
+  mutate(hw = apparent_tmin > p95_min) #using at-min for people level data
 daymet_heatwaves$zip_code <- as.character(daymet_heatwaves$zip_code)
 
 daymet_heatwaves <- daymet_heatwaves %>%
@@ -103,36 +108,10 @@ hw_events_2day <- daymet_heatwaves %>%
     .groups = "drop"
   ) %>%
   filter(duration >= 2) # enforce 2+ days
-
-#summarise TRUE runs and 3+ day heatwaves
-hw_events_3day <- daymet_heatwaves %>%
-  filter(hw) %>% #keeps only heatwave days
-  group_by(site, event_id, year) %>%
-  summarise(
-    duration = n(), #adjust to just "duration" if 
-    start_date = min(date),
-    end_date = max(date),
-    mean_tmin = mean(apparent_tmin),
-    .groups = "drop"
-  ) %>%
-  filter(duration >= 3) # enforce 3+ days
 ```
 
-#yrly hw events
+#yrly 2 day hw events
 ```{r}
-hw_yearly_3day <- hw_events_3day %>%
-  mutate(year = lubridate::year(start_date)) %>%
-  group_by(site, year) %>%
-  summarise(
-    #n_events = n(),
-    total_hw_days = sum(duration),
-    #total_hw_events = sum(n_events),
-    #avg_duration = mean(duration),
-    #max_duration = max(duration),
-    yrly_meantmin = mean(mean_tmin),
-    .groups = "drop"
-  )
-
 hw_yearly_2day <- hw_events_2day %>%
   mutate(year = lubridate::year(start_date)) %>%
   group_by(site, year) %>%
@@ -140,8 +119,6 @@ hw_yearly_2day <- hw_events_2day %>%
     #n_events = n(),
     total_hw_days = sum(duration),
     #total_hw_events = sum(n_events),
-    #avg_duration = mean(duration),
-    #max_duration = max(duration),
     yrly_meantmin = mean(mean_tmin),
     .groups = "drop"
   )
@@ -152,7 +129,7 @@ hw_2day_occurences <- hw_yearly_2day %>%
     mean_hw_2day = mean(total_hw_days))
 ```
 
-
+#joining heatwave and svi data 
 ```{r}
 svi$site <- as.character(svi$site)
 
@@ -166,32 +143,37 @@ svi_heat <- svi_heat %>%
     heat_quartile = ntile(mean_hw_2day, 4))      # Q1 = least vulnerable, Q5 = most 
 ```
 
+#joining svi+hw df to census tract shp, creating bivar column
+-- from here mostly using code from PINC 2025 to create bivar map 
 ```{r}
-
+#joining hw+svi df to census shp
 svi_shp <- left_join(svi_heat,shape_data, by = c("site" = "geoid"))
 
+#renaming values/column names to read in all data easier 
 tracts_bivar_all <- svi_shp %>% 
   pivot_longer( 
-    cols = starts_with("mean_hw_"),  # e.g., mean_hw_2day_85, etc. 
+    cols = starts_with("mean_hw_"),  
     names_to = "definition", 
     values_to = "heat_value" 
   ) 
 
+#create a bivariate class between svi and heat
 tracts_bivar_all <- tracts_bivar_all %>% 
   mutate( 
     bivar_class = paste0(svi_quartile, "-", heat_quartile) 
   )
 
+#
 tracts_bivar_all <- tracts_bivar_all %>% 
   mutate(definition = recode(definition, 
-    "mean_hw_2day"   = "2-Day ≥ 95th", 
-    #"mean_hw_3"   = "3-Day ≥ 97.5th", 
+    "mean_hw_2day"   = "2-Day ≥ 95th"
   )) %>%  
   filter(definition == "2-Day ≥ 95th") #only looking at one heatwave definition 
 ```
 
 ```{r}
 
+#forcing r to read in the df as a shape/mappable object 
 tracts_bivar_all <- st_as_sf(tracts_bivar_all)
 
 # Use the same bivar_palette you used in the map 
@@ -263,6 +245,8 @@ final_plot <- main_map +
 
 print(final_plot) 
 ```
+
+#saving a picture of the map as a png 
 ```{r}
 ggsave("Svi_Heat_2018_2023_Census.png", plot = final_plot, width = 9, height = 6, dpi = 300)
 ```
