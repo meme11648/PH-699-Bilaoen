@@ -1,0 +1,59 @@
+---
+title: "Calculating Percentiles"
+author: "Mahal Bilaoen"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+rm(list=ls()) #clear environment
+knitr::opts_chunk$set(echo = TRUE)
+pacman::p_load(sf ,tigris, dplyr ,tidyr, tidycensus, tidyverse, lubridate, heatwaveR)
+```
+
+#reading in baseline data
+```{r}
+daymet_baseline <- read.csv("daymet_baseline.csv")
+```
+
+#Percentile baseline value by census tract
+
+Based on our literature review, there isn't a particular percentile we should focus on. Different studies rely on different percentiles, so for a sensitivity analysis it is useful to look at how different baselines may affect what apparent temperature is considered a heatwave temperature. Additionally, seasonality is adjusted for months 4-10 to represent the summer months of San Francisco. (Aligns with the dry months of the California water year)
+```{r}
+#alter date to yyyy-mm-dd format
+daymet_baseline <- daymet_baseline %>%
+  mutate(date = (make_date(year = year) + days(yday - 1)),
+         month = month(date),
+         vp_kp = vp/1000,
+         tmean = (tmin + tmax) / 2,
+         AT_mean = -1.3 + 0.92 * tmean + 2.2 * vp_kp,
+         AT_min = -1.3 + 0.92 * tmin + 2.2 * vp_kp,
+         AT_max = -1.3 + 0.92 * tmax + 2.2 * vp_kp,
+         ) %>% 
+  filter(month >= 4 & month <= 10) #filtering by summer months for baseline for consistent reference periods 
+
+daymet_percentiles_byCENSUS <- daymet_baseline %>%
+  group_by(zip_code) %>% #filtering on a zipcode level, site is census tract 
+  summarise(
+    #calculating for 85th percentile 
+    p85_mean = quantile(AT_mean, 0.85, na.rm = TRUE),
+    p85_min = quantile(AT_min, 0.85, na.rm = TRUE),
+    p85_max = quantile(AT_max, 0.85,na.rm = TRUE),
+    
+    #calculating for 95th percentile
+    p95_mean = quantile(AT_mean, 0.95, na.rm = TRUE),
+    p95_min = quantile(AT_min, 0.95, na.rm = TRUE),
+    p95_max = quantile(AT_max, 0.95,na.rm = TRUE),
+    
+    #calculating for 97.5th percentile
+    p97.5_mean = quantile(AT_mean, 0.975, na.rm = TRUE),
+    p97.5_min = quantile(AT_min, 0.975, na.rm = TRUE),
+    p97.5_max = quantile(AT_max, 0.975,na.rm = TRUE),
+    .groups = "drop"
+  )
+
+write.csv(daymet_percentiles_byCENSUS, "daymet_percentile_byCENSUS.csv", row.names = FALSE)
+```
+
+
