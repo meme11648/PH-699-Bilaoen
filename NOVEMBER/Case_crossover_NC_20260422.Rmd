@@ -1,0 +1,738 @@
+---
+title: "Medical Incidents"
+author: "Mahal Bilaoen - Edited by Nancy Carmona"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+pacman::p_load(tidyverse,dplyr,ggplot2,lubridate,brms, data.table, cmdstanr, season, dlnm, splines, survival, gnm, broom, MASS)
+ 
+```
+
+# Loading data 
+```{r load.data}
+
+# loading in data sets 
+
+# load medical incidents from SFDPH
+medical_incidents <- read.csv("~/PH 699 Bilaoen/Fire_Department_and_Emergency_Medical_Services_Dispatched_Calls_for_Service_20260309.csv")
+
+# load all current temp data
+daymet_current <- read.csv("~/PH 699 Bilaoen/daymet_current.csv")
+
+# load percentile (zip code level) from historical data (30 year normal) - includes min/mean/max of 85th/95/97.5th 
+#limited to months 4-10 
+daymet_p95 <- read.csv("~/PH 699 Bilaoen/NOVEMBER/daymet_percentile_byZIP_stratified.csv") 
+
+```
+
+# Calculating AT 
+```{r}
+# first make a date column like in previous dataframe and add zero infront of site
+daymet_current$site <- paste0("0", daymet_current$site)
+
+# calculate AT from temp and vp 
+daymet_current <- daymet_current %>%
+  mutate(date = make_date(year = year) + days(yday - 1),
+         month = month(date),
+         apparent_tmin = -1.3 + 0.92*tmin + 2.2*(vp/1000),
+         apparent_tmax = -1.3 + 0.92*tmax + 2.2*(vp/1000),
+         apparent_tmean = (apparent_tmin+apparent_tmax)/2
+         )
+
+# merge data sets
+daymet_current_join <- left_join(daymet_current, daymet_p95, by = "zip_code")
+
+# remove duplicate observations
+# Deduplicate by zip
+daymet_heatwaves <- daymet_current_join %>%
+  distinct(zip_code, date, .keep_all = TRUE) 
+
+
+```
+
+# Heatwave events 
+```{r}
+
+#tally heatwave days (above 95th percentile)
+daymet_heatwaves <- daymet_heatwaves %>%
+  filter(month >= 4 & month < 10) %>% #restrict to SF summer dates to avoid seasonal bias
+  mutate(hw = apparent_tmean > p95_mean) #trying mean now
+daymet_heatwaves$zip_code <- as.character(daymet_heatwaves$zip_code)
+
+daymet_heatwaves <- daymet_heatwaves %>%
+  group_by(site, zip_code) %>%
+  mutate(event_id = rleid(hw))
+
+#summarise TRUE runs and 2+ day heatwaves
+hw_events_2day <- daymet_heatwaves %>%
+  filter(hw) %>% #keeps only heatwave days
+  group_by(site, event_id, zip_code, year) %>%
+  summarise(
+    duration = n(),
+    start_date = min(date),
+    end_date = max(date),
+    mean_tmean = mean(apparent_tmean),
+    .groups = "drop"
+  ) %>%
+  filter(duration >= 2) # enforce 2+ days
+
+#summarise TRUE runs and 3+ day heatwaves
+hw_events_3day <- daymet_heatwaves %>%
+  filter(hw) %>% #keeps only heatwave days
+  group_by(site, event_id, zip_code, year) %>%
+  summarise(
+    duration = n(), #adjust to just "duration" if 
+    start_date = min(date),
+    end_date = max(date),
+    mean_tmean = mean(apparent_tmean),
+    .groups = "drop"
+  ) %>%
+  filter(duration >= 3) # enforce 3+ days
+
+```
+
+# Cleaning 911 calls 
+```{r}
+per_day <- medical_incidents |>
+  mutate(Call.Date = mdy(Call.Date)) |>
+  count(Zipcode.of.Incident, Call.Date) 
+
+per_day <- per_day |>
+  mutate(year = year(Call.Date),
+         month = month(Call.Date),
+         Zipcode.of.Incident = as.character(Zipcode.of.Incident)) |>
+  relocate(year, .after = "Call.Date") |> 
+  filter(month >= 4 & month < 10) %>% 
+  drop_na(Zipcode.of.Incident)
+
+#seasonal bias to ONLY track assumed heatwave related days, need to find paper to support this 
+#CDPH relies on seasonal bias 
+
+#percentile_95 <- quantile(per_day$n, probs = 0.95, na.rm = TRUE)
+#95th percentile is 44 calls for years 2018-2023
+#95th percentile is 45 calls for years 2018-2023 BUT only through the summer months 
+
+```
+
+Within the Medical Incidents raw data, there are 334 cases missing. Subsequently, many of these cases are dispatched to Daly City, California or could not be matched to a zipcode.  
+```{r}
+#missingness in the data? 
+huh <- medical_incidents %>%
+  mutate(Call.Date = mdy(Call.Date)) %>%
+  filter(is.na(Zipcode.of.Incident))
+
+334/706993
+#0.000472% calls are missing zipcodes 
+```
+
+
+# Merging AT and 911 dfs
+```{r}
+overall_current <- left_join(
+  per_day,
+  daymet_heatwaves,
+  by = c(
+    "Call.Date" = "date",
+    "Zipcode.of.Incident" = "zip_code",
+    "year" = "year",
+    "month" = "month"
+  ),
+  na_matches = "never"
+)
+
+overall_current <- overall_current %>% 
+  mutate(day_abbr = format(as.Date(Call.Date), "%a"),
+         date = Call.Date)
+         
+```
+
+## NC: checking over dispersion
+
+We used a conditional Poisson case-crossover model for daily 911 call counts. In these results, the coefficient for "hw" tells you how call counts differ on heat-wave days versus non-heat-wave days. The outcome of interest is a count of 911 models. The model uses a log link and the effects are interpreted as rate ratios after exponentiating coefficients. 
+
+```{r}
+library(dplyr)
+library(lubridate)
+library(gnm)
+library(MASS)
+
+dat <- overall_current %>%
+  mutate(
+    Call.Date = as.Date(Call.Date),
+    year = lubridate::year(Call.Date),
+    month = lubridate::month(Call.Date),
+    dow = lubridate::wday(Call.Date, label = TRUE, abbr = TRUE),
+    hw = as.integer(hw),
+    cc_strata = interaction(Zipcode.of.Incident, year, month, dow, drop = TRUE) 
+  )
+
+ fit_p <- gnm(
+  n ~ hw,
+  eliminate = cc_strata, #factor for the model but are not necessarily of interest
+  family = poisson(link = "log"),
+  data = dat
+)
+
+pearson_dispersion <- sum(residuals(fit_p, type = "pearson")^2) / df.residual(fit_p)
+deviance_dispersion <- deviance(fit_p) / df.residual(fit_p)
+
+data.frame(
+  pearson_dispersion = pearson_dispersion,
+  deviance_dispersion = deviance_dispersion
+)
+
+
+beta <- coef(fit_p)["hw"]
+se <- sqrt(vcov(fit_p)["hw", "hw"])
+
+data.frame(
+  term = "Heat wave",
+  IRR = exp(beta),
+  LCL = exp(beta - 1.96 * se),
+  UCL = exp(beta + 1.96 * se)
+)
+
+# percent increase
+(1.101841 - 1) * 100
+
+# 10.18% higher 911 call rates on heat-wave days.
+
+
+# 
+c(
+  lower_pct = (1.087843 - 1) * 100,
+  upper_pct = (1.11602 - 1) * 100
+)
+
+
+```
+
+# Results from Basic Model 
+
+In conditional Poisson case-crossover models matched on ZIP code, year, month, and day of week, heat-wave days were associated with higher 911 call counts (IRR = 1.10, 95% CI: 1.09, 1.12). Overall, we find that heat-wave days were associated with a 10.2% increase in 911 calls (95% CI: 8.8% to 11.6%).
+
+
+## Modeling only 1 day lag (no same day heat in model)
+
+Heat-wave exposure on the previous day was also associated with elevated 911 call counts (IRR = 1.07, 95% CI: 1.05, 1.08), suggesting both immediate and short-term delayed effects.
+ 
+```{r}
+
+dat_lag1 <- dat %>%
+  group_by(Zipcode.of.Incident) %>%
+  arrange(Call.Date, .by_group = TRUE) %>%
+  mutate(hw_lag1 = lag(hw, 1)) %>%
+  ungroup()
+
+
+fit_p_lag1 <- gnm(
+  n ~ hw_lag1,
+  eliminate = cc_strata,
+  family = poisson(link = "log"),
+  data = dat_lag1
+)
+
+summary(fit_p_lag1)
+
+beta <- coef(fit_p_lag1)["hw_lag1"]
+se <- sqrt(vcov(fit_p_lag1)["hw_lag1", "hw_lag1"])
+
+data.frame(
+  term = "Heat wave (lag 1 day)",
+  IRR = exp(beta),
+  LCL = exp(beta - 1.96 * se),
+  UCL = exp(beta + 1.96 * se)
+)
+
+```
+
+## Model with same day heat + 1 day lag 
+
+In conditional Poisson case-crossover models matched on ZIP code, year, month, and day of week, same-day heat-wave exposure was associated with higher 911 call counts (IRR = 1.09, 95% CI: 1.07, 1.11), and previous-day heat-wave exposure was also independently associated with an increase in 911 calls (IRR = 1.02, 95% CI: 1.01, 1.04). Most of the increase in 911 calls occurred on the heat-wave day itself, but there is still a small increase the following day.
+
+```{r}
+
+dat <- overall_current %>%
+  mutate(
+    Call.Date = as.Date(Call.Date),
+    year = as.integer(format(Call.Date, "%Y")),
+    month = as.integer(format(Call.Date, "%m")),
+    dow = format(Call.Date, "%a"),
+    hw = as.integer(hw),
+    cc_strata = interaction(Zipcode.of.Incident, year, month, dow, drop = TRUE)
+  ) %>%
+  group_by(Zipcode.of.Incident) %>%
+  arrange(Call.Date, .by_group = TRUE) %>%
+  mutate(
+    hw_lag1 = lag(hw, 1),
+    hw_lag2 = lag(hw, 2),
+    hw_lag3 = lag(hw, 3)
+  ) %>%
+  ungroup()
+
+fit_lag01 <- gnm(
+  n ~ hw + hw_lag1 + hw_lag2 + hw_lag3,
+  eliminate = cc_strata,
+  family = poisson(link = "log"),
+  data = dat
+)
+
+summary(fit_lag01)
+
+beta <- coef(fit_lag01)[c("hw", "hw_lag1", "hw_lag2", "hw_lag3")]
+se <- sqrt(diag(vcov(fit_lag01)))[c("hw", "hw_lag1", "hw_lag2", "hw_lag3")]
+
+results <- data.frame(
+  term = c("Heat wave (lag 0)", "Heat wave (lag 1)", "Heat wave (lag 2)", "Heat wave (lag 3)"),
+  IRR = exp(beta),
+  LCL = exp(beta - 1.96 * se),
+  UCL = exp(beta + 1.96 * se)
+)
+
+results
+
+```
+
+We also want to understand how there could be an increase in medical calls during heatwave events. 
+
+#2+ and 3+ day heatwave events 
+```{r}
+#this can be rearranged to the top of initial data aggregation and cleaning to avoid confusion with select function in MASS package 
+
+#adding on 2+ day hw runs
+dat <- dat %>%
+  left_join(
+    hw_events_2day %>%
+      dplyr::select(site, event_id, zip_code, year) %>% 
+      mutate(hw_2plus = 1L), #identifies when there is a 2+ day hw event
+    by = c("site", "event_id", "Zipcode.of.Incident" = "zip_code", "year")
+  ) 
+#wasn't running through the pipe??   
+dat <- dat %>%   
+  mutate(hw_2plus = coalesce(hw_2plus, 0L)) #non 2+ day hw flagged as 0 
+
+#adding on 3+ hw runs 
+dat <- dat %>%
+  left_join(
+    hw_events_3day %>%
+      dplyr::select(site, event_id, zip_code, year) %>%
+      dplyr::mutate(hw_3plus = 1L), #identifies when there is a 3+ day hw event
+    by = c("site", "event_id", "Zipcode.of.Incident" = "zip_code", "year"))
+
+#also not running through the pipe 
+dat <- dat %>% 
+  mutate(hw_3plus = coalesce(hw_3plus, 0L)) #non 3+ day hw flagged as 0 
+
+```
+
+When looking at heatwave events of 2 or more heatwave days, 911 calls are expected to increase by 10.74% than on non-heatwave days. 
+#2 day hw runs
+```{r}
+fit_2day <- gnm(
+  n ~ hw_2plus,
+  eliminate = cc_strata, #factor for the model but are not necessarily of interest
+  family = poisson(link = "log"),
+  data = dat
+)
+
+pearson_2_dispersion <- sum(residuals(fit_2day, type = "pearson")^2) / df.residual(fit_2day)
+deviance_2_dispersion <- deviance(fit_2day) / df.residual(fit_2day)
+
+data.frame(
+  pearson_dispersion = pearson_2_dispersion, 
+  deviance_dispersion = deviance_2_dispersion
+)
+
+beta_2day <- coef(fit_2day)["hw_2plus"]
+se_2day <- sqrt(vcov(fit_2day)["hw_2plus", "hw_2plus"])
+
+data.frame(
+  term = "2 Day Heat wave",
+  IRR = exp(beta_2day),
+  LCL = exp(beta_2day - 1.96 * se_2day),
+  UCL = exp(beta_2day + 1.96 * se_2day)
+)
+
+# percent increase
+(1.141496	 - 1) * 100
+
+# 14.15% higher 911 call rates on 2+ heat-wave days.
+
+# 
+c(
+  lower_pct = (1.118848 - 1) * 100, #11.88%
+  upper_pct = (1.164601 - 1) * 100 #16.46
+)
+```
+
+#3 day hw runs
+```{r}
+fit_3day <- gnm(
+  n ~ hw_3plus,
+  eliminate = cc_strata, #factor for the model but are not necessarily of interest
+  family = poisson(link = "log"),
+  data = dat
+)
+
+pearson_3_dispersion <- sum(residuals(fit_3day, type = "pearson")^2) / df.residual(fit_3day)
+deviance_3_dispersion <- deviance(fit_3day) / df.residual(fit_3day)
+
+data.frame(
+  pearson_dispersion = pearson_3_dispersion,
+  deviance_dispersion = deviance_3_dispersion
+)
+
+beta_3day <- coef(fit_3day)["hw_3plus"]
+se_3day <- sqrt(vcov(fit_3day)["hw_3plus", "hw_3plus"])
+
+data.frame(
+  term = "Heat wave",
+  IRR = exp(beta_3day),
+  LCL = exp(beta_3day - 1.96 * se_3day),
+  UCL = exp(beta_3day + 1.96 * se_3day)
+)
+
+# percent increase
+(1.142974	 - 1) * 100
+
+# 14.30% higher 911 call rates on 3+ heat-wave days.
+
+
+c(
+  lower_pct = (1.117027 - 1) * 100, #11.70%
+  upper_pct = (1.169523 - 1) * 100) #16.95% 
+```
+
+#creating lag for 2+ and 3+ heat wave events 
+```{r}
+dat <- dat %>%
+  group_by(Zipcode.of.Incident) %>%
+  arrange(Call.Date, .by_group = TRUE) %>%
+  mutate(
+    hw2_lag1 = lag(hw_2plus, 1),
+    hw2_lag2 = lag(hw_2plus, 2),
+    hw2_lag3 = lag(hw_2plus, 3),
+    hw3_lag1 = lag(hw_3plus, 1),
+    hw3_lag2 = lag(hw_3plus, 2),
+    hw3_lag3 = lag(hw_3plus, 3),
+  ) %>%
+  ungroup()
+
+```
+
+#2+ heatwaves with lag
+```{r}
+fit_lag2 <- gnm(
+  n ~ hw_2plus + hw2_lag1 + hw2_lag2 + hw2_lag3,
+  eliminate = cc_strata,
+  family = poisson(link = "log"),
+  data = dat,
+  na.action = na.exclude
+)
+
+summary(fit_lag2)
+
+#tidy function should work???
+
+terms_needed <- c("hw_2plus", "hw2_lag1","hw2_lag2","hw2_lag3")
+
+beta_2plus_1lag <- coef(fit_lag2)[terms_needed]
+se_2plus_1lag <- sqrt(diag(vcov(fit_lag2)))[terms_needed]
+
+results_2plus_1lag <- data.frame(
+  term = c("2 Day Heat wave (lag 0)", 
+           "2 Day Heat wave (lag 1)", 
+           "2 Day Heat wave (lag 2)",
+           "2 Day Heat wave (lag 3)"),
+  IRR = exp(beta_2plus_1lag),
+  LCL = exp(beta_2plus_1lag - 1.96 * se_2plus_1lag),
+  UCL = exp(beta_2plus_1lag + 1.96 * se_2plus_1lag)
+  ) 
+
+results_2plus_1lag
+
+c(
+ day_0 = (1.1132612 - 1) * 100, #day 0 11.33%
+ day_1 = (1.0502980	- 1) * 100, #day 1 5.03%
+ day_2 = (0.9863017	- 1) * 100, #day 2 -1.37%
+ day_3 = (0.9817768 - 1) * 100  #day 3 -1.82%
+)
+```
+
+#3+ heatwaves with lag
+```{r}
+fit_lag3 <- gnm(
+  n ~ hw_3plus + hw3_lag1 + hw3_lag2 + hw3_lag3,
+  eliminate = cc_strata,
+  family = poisson(link = "log"),
+  data = dat
+)
+
+beta_3plus_1lag <- coef(fit_lag3)[c("hw_3plus", "hw3_lag1","hw3_lag2","hw3_lag3")]
+se_3plus_1lag <- sqrt(diag(vcov(fit_lag3)))[c("hw_3plus", "hw3_lag1","hw3_lag2","hw3_lag3")]
+
+results_3plus_1lag <- data.frame(
+  term = c("3 Day Heat wave (lag 0)", 
+           "3 Day Heat wave (lag 1)",
+           "3 Day Heat wave (lag 2)",
+           "3 Day Heat wave (lag 3)"),
+  IRR = exp(beta_3plus_1lag),
+  LCL = exp(beta_3plus_1lag - 1.96 * se_3plus_1lag),
+  UCL = exp(beta_3plus_1lag + 1.96 * se_3plus_1lag)
+)
+
+results_3plus_1lag
+
+c(
+ day_0 = (1.121103 - 1) * 100, #day 0 12.11%
+ day_1 = (1.041586	- 1) * 100, #day 1 4.16%
+ day_2 = (0.996396	- 1) * 100, #day 2 -0.36%
+ day_3 = (0.963118 - 1) * 100  #day 3 -3.69%
+)
+
+```
+
+#Sensitivity Analysis ATmin 
+Existing literature suggests that calls between different definitions of heat (minimum, mean, maxium), which affects the types of analysis being conducted (looking at general trends vs what would realistically happen to a human being). 
+
+#HW by AT-min definition 
+```{r}
+#tally heatwave days (above 95th percentile)
+daymet_heatwaves_min <- daymet_heatwaves %>%
+  filter(month >= 4 & month < 10) %>% #restrict to SF summer dates to avoid seasonal bias
+  mutate(hw = apparent_tmin > p95_min) #trying mean now
+daymet_heatwaves$zip_code <- as.character(daymet_heatwaves$zip_code)
+
+daymet_heatwaves_min <- daymet_heatwaves_min %>%
+  group_by(site, zip_code) %>%
+  mutate(event_id = rleid(hw))
+
+#summarise TRUE runs and 2+ day heatwaves
+hw_events_min_2day <- daymet_heatwaves_min %>%
+  filter(hw) %>% #keeps only heatwave days
+  group_by(site, event_id, zip_code, year) %>%
+  summarise(
+    duration = n(),
+    start_date = min(date),
+    end_date = max(date),
+    mean_tmin = mean(apparent_tmin),
+    .groups = "drop"
+  ) %>%
+  filter(duration >= 2) # enforce 2+ days
+
+#summarise TRUE runs and 3+ day heatwaves
+hw_events_min_3day <- daymet_heatwaves_min %>%
+  filter(hw) %>% #keeps only heatwave days
+  group_by(site, event_id, zip_code, year) %>%
+  summarise(
+    duration = n(), #adjust to just "duration" if 
+    start_date = min(date),
+    end_date = max(date),
+    mean_tmin = mean(apparent_tmin),
+    .groups = "drop"
+  ) %>%
+  filter(duration >= 3) # enforce 3+ days
+```
+
+#merging At-min and 911 calls 
+```{r}
+overall_current_min <- left_join(
+  per_day,
+  daymet_heatwaves_min,
+  by = c(
+    "Call.Date" = "date",
+    "Zipcode.of.Incident" = "zip_code",
+    "year" = "year",
+    "month" = "month"
+  ),
+  na_matches = "never"
+)
+
+overall_current_min <- overall_current_min %>% 
+  mutate(day_abbr = format(as.Date(Call.Date), "%a"),
+         date = Call.Date)
+```
+
+#adding 3 day lag for all hw events 
+```{r}
+dat_min <- overall_current_min %>%
+  mutate(
+    Call.Date = as.Date(Call.Date),
+    year = as.integer(format(Call.Date, "%Y")),
+    month = as.integer(format(Call.Date, "%m")),
+    dow = format(Call.Date, "%a"),
+    hw = as.integer(hw),
+    cc_strata = interaction(Zipcode.of.Incident, year, month, dow, drop = TRUE)
+  ) %>%
+  group_by(Zipcode.of.Incident) %>%
+  arrange(Call.Date, .by_group = TRUE) %>%
+  mutate(
+    hw_lag1 = lag(hw, 1),
+    hw_lag2 = lag(hw, 2),
+    hw_lag3 = lag(hw, 3)
+  ) %>%
+  ungroup()
+```
+
+#all hw events + 3 day lag 
+```{r}
+fit_lag01_min <- gnm(
+  n ~ hw + hw_lag1 + hw_lag2 + hw_lag3,
+  eliminate = cc_strata,
+  family = poisson(link = "log"),
+  data = dat_min
+)
+
+summary(fit_lag01_min)
+
+beta_min <- coef(fit_lag01)[c("hw", "hw_lag1", "hw_lag2", "hw_lag3")]
+se_min <- sqrt(diag(vcov(fit_lag01_min)))[c("hw", "hw_lag1", "hw_lag2", "hw_lag3")]
+
+results_min <- data.frame(
+  term = c("Heat wave (lag 0)", "Heat wave (lag 1)", "Heat wave (lag 2)", "Heat wave (lag 3)"),
+  IRR = exp(beta_min),
+  LCL = exp(beta_min - 1.96 * se_min),
+  UCL = exp(beta_min + 1.96 * se_min)
+)
+
+results_min
+
+c(
+day_0 = (1.0896671 - 1)*100, #day 0 8.97%
+day_1 = (1.0260203 - 1)*100, #day 1 2.60%
+day_2 = (0.9778570 - 1)*100, #day 2 -2.21%
+day_3 = (0.9918791 - 1)*100  #day 3 -0.81%
+)
+```
+
+#adding 2+ and 3+ day runs 
+```{r}
+#adding on 2+ day hw runs
+dat_min <- dat_min %>%
+  left_join(
+    hw_events_min_2day %>%
+      dplyr::select(site, event_id, zip_code, year) %>% 
+      mutate(hw_2plus = 1L), #identifies when there is a 2+ day hw event
+    by = c("site", "event_id", "Zipcode.of.Incident" = "zip_code", "year")
+  ) %>%
+  mutate(hw_2plus = coalesce(hw_2plus, 0L)) #non 2+ day hw flagged as 0 
+
+#adding on 3+ hw runs 
+dat_min <- dat_min %>%
+  left_join(
+    hw_events_min_3day %>%
+      dplyr::select(site, event_id, zip_code, year) %>%
+      dplyr::mutate(hw_3plus = 1L), #identifies when there is a 3+ day hw event
+    by = c("site", "event_id", "Zipcode.of.Incident" = "zip_code", "year")
+  ) %>%
+  mutate(hw_3plus = coalesce(hw_3plus, 0L)) #non 3+ day hw flagged as 0 
+```
+
+#adding lag for 2 and 3 day runs 
+```{r}
+dat_min <- dat_min %>%
+  group_by(Zipcode.of.Incident) %>%
+  arrange(Call.Date, .by_group = TRUE) %>%
+  mutate(
+    hw2_lag1 = lag(hw_2plus, 1),
+    hw2_lag2 = lag(hw_2plus, 2),
+    hw2_lag3 = lag(hw_2plus, 3),
+    hw3_lag1 = lag(hw_3plus, 1),
+    hw3_lag2 = lag(hw_3plus, 2),
+    hw3_lag3 = lag(hw_3plus, 3),
+  ) %>%
+  ungroup()
+```
+
+#2 day runs + lag 
+```{r}
+fit_lag2_min <- gnm(
+  n ~ hw_2plus + hw2_lag1 + hw2_lag2 + hw2_lag3,
+  eliminate = cc_strata,
+  family = poisson(link = "log"),
+  data = dat_min,
+  na.action = na.exclude
+)
+
+summary(fit_lag2_min)
+
+terms_needed <- c("hw_2plus", "hw2_lag1","hw2_lag2","hw2_lag3")
+
+beta_2plus_min_1lag <- coef(fit_lag2)[terms_needed]
+se_2plus_min_1lag <- sqrt(diag(vcov(fit_lag2)))[terms_needed]
+
+results_2plus_min_1lag <- data.frame(
+  term = c("2 Day Heat wave (lag 0)", 
+           "2 Day Heat wave (lag 1)", 
+           "2 Day Heat wave (lag 2)",
+           "2 Day Heat wave (lag 3)"),
+  IRR = exp(beta_2plus_1lag),
+  LCL = exp(beta_2plus_1lag - 1.96 * se_2plus_1lag),
+  UCL = exp(beta_2plus_1lag + 1.96 * se_2plus_1lag)
+  ) 
+
+results_2plus_min_1lag
+
+c(
+day_0 = (1.1132612 - 1) * 100, #day 0 11.32%
+day_1 = (1.0502980	- 1) * 100, #day 1 5.03%
+day_2 = (0.9863017	- 1) * 100, #day 2 -1.37%
+day_3 = (0.9817768 - 1) * 100 #day 3  -1.82%
+)
+
+```
+
+#3 day events + lag 
+```{r}
+fit_lag3_min <- gnm(
+  n ~ hw_3plus + hw3_lag1 + hw3_lag2 + hw3_lag3,
+  eliminate = cc_strata,
+  family = poisson(link = "log"),
+  data = dat_min
+)
+
+beta_3plus_min_1lag <- coef(fit_lag3)[c("hw_3plus", "hw3_lag1","hw3_lag2","hw3_lag3")]
+se_3plus_min_1lag <- sqrt(diag(vcov(fit_lag3)))[c("hw_3plus", "hw3_lag1","hw3_lag2","hw3_lag3")]
+
+results_3plus_min_1lag <- data.frame(
+  term = c("3 Day Heat wave (lag 0)", 
+           "3 Day Heat wave (lag 1)",
+           "3 Day Heat wave (lag 2)",
+           "3 Day Heat wave (lag 3)"),
+  IRR = exp(beta_3plus_min_1lag),
+  LCL = exp(beta_3plus_min_1lag - 1.96 * se_3plus_min_1lag),
+  UCL = exp(beta_3plus_min_1lag + 1.96 * se_3plus_min_1lag)
+)
+
+results_3plus_min_1lag
+
+c(
+day_0 = (1.121103 - 1) * 100, #day 0 12.11%
+day_1 = (1.041586	- 1) * 100, #day 1 4.16%
+day_2 = (0.996396 - 1) * 100, #day 2 -0.36%
+day_3 = (0.963118 - 1) * 100  #day 3 -0.37% 
+)
+```
+
+#IRR for the 9th percentile using mean and minimum
+```{r}
+all_results_mean <- rbind(results,results_2plus_1lag,results_3plus_1lag)
+
+all_results_mean <- all_results_mean %>% 
+  mutate(
+    IRR_percent = (IRR - 1)*100
+  )
+
+
+all_results_min <- rbind(results_min,results_2plus_min_1lag,results_3plus_min_1lag)
+
+all_results_min <- all_results_min %>% 
+  mutate(
+    IRR_percent = (IRR - 1)*100
+  )
+```
+
