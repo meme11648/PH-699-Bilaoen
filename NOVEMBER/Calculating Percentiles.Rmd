@@ -33,7 +33,7 @@ daymet_baseline <- daymet_baseline %>%
          ) %>% 
   filter(month >= 4 & month <= 10) #filtering by summer months for baseline for consistent reference periods 
 
-daymet_percentiles_byCENSUS <- daymet_baseline %>%
+daymet_percentiles_byZIP <- daymet_baseline %>%
   group_by(zip_code) %>% #filtering on a zipcode level, site is census tract 
   summarise(
     #calculating for 85th percentile 
@@ -53,7 +53,7 @@ daymet_percentiles_byCENSUS <- daymet_baseline %>%
     .groups = "drop"
   )
 
-write.csv(daymet_percentiles_byCENSUS, "daymet_percentile_byCENSUS.csv", row.names = FALSE)
+write.csv(daymet_percentiles_byZIP, "daymet_percentile_byZIP.csv", row.names = FALSE)
 ```
 
 
