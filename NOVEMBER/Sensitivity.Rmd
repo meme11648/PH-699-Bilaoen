@@ -117,7 +117,7 @@ hwe_2day_85_min <- hw_85_min %>%
   filter(duration >= 2) # enforce 2+ days
 
 #summarise TRUE runs and 3+ day heatwaves
-hwe_3day_85_mean <- hw_85_mean %>%
+hwe_3day_85_min <- hw_85_min %>%
   filter(hw) %>% #keeps only heatwave days
   group_by(site, event_id, zip_code, year) %>%
   summarise(
@@ -299,7 +299,7 @@ overall_current_975_min <- overall_current_975_min %>%
 
 #85th percentiles 
 
-##85th mean 
+##85th mean 1 day + lag
 ```{r}
 dat_85_mean <- overall_current_85_mean %>%
   mutate(
@@ -341,7 +341,97 @@ results_85_mean <- data.frame(
 results_85_mean
 ```
 
-##85th mininmum 
+##85th mean 2+ day + lag 
+```{r}
+dat_85_mean <- dat_85_mean %>%
+  left_join(
+    hwe_2day_85_mean %>%
+      dplyr::select(site, event_id, zip_code, year) %>% 
+      mutate(hw_2plus = 1L), #identifies when there is a 2+ day hw event
+    by = c("site", "event_id", "Zipcode.of.Incident" = "zip_code", "year")
+  ) 
+
+dat_85_mean <- dat_85_mean %>%   
+  mutate(hw_2plus = coalesce(hw_2plus, 0L)) #non 2+ day hw flagged as 0 
+
+dat_85_mean <- dat_85_mean %>%
+  group_by(Zipcode.of.Incident) %>%
+  arrange(Call.Date, .by_group = TRUE) %>%
+  mutate(
+    hw2_lag1 = lag(hw_2plus, 1),
+    hw2_lag2 = lag(hw_2plus, 2),
+    hw2_lag3 = lag(hw_2plus, 3)
+  ) %>%
+  ungroup()
+
+fit_lag_85_mean_2 <- gnm(
+  n ~ hw_2plus + hw2_lag1 + hw2_lag2 + hw2_lag3,
+  eliminate = cc_strata,
+  family = poisson(link = "log"),
+  data = dat_85_mean
+)
+
+summary(fit_lag_85_mean_2)
+
+beta <- coef(fit_lag_85_mean_2)[c("hw_2plus", "hw2_lag1", "hw2_lag2", "hw2_lag3")]
+se <- sqrt(diag(vcov(fit_lag_85_mean_2)))[c("hw_2plus", "hw2_lag1", "hw2_lag2", "hw2_lag3")]
+
+results_85_mean_2plus <- data.frame(
+  term = c("85 Heat wave (lag 0)", "85 Heat wave (lag 1)", "85 Heat wave (lag 2)", "85 Heat wave (lag 3)"),
+  IRR = exp(beta),
+  LCL = exp(beta - 1.96 * se),
+  UCL = exp(beta + 1.96 * se)
+)
+
+results_85_mean_2plus
+```
+##85th mean 3 day + lag 
+```{r}
+dat_85_mean <- dat_85_mean %>%
+  left_join(
+    hwe_3day_85_mean %>%
+      dplyr::select(site, event_id, zip_code, year) %>% 
+      mutate(hw_3plus = 1L), #identifies when there is a 3+ day hw event
+    by = c("site", "event_id", "Zipcode.of.Incident" = "zip_code", "year")
+  ) 
+
+dat_85_mean <- dat_85_mean %>%   
+  mutate(hw_3plus = coalesce(hw_3plus, 0L)) #non 3+ day hw flagged as 0 
+
+dat_85_mean <- dat_85_mean %>%
+  group_by(Zipcode.of.Incident) %>%
+  arrange(Call.Date, .by_group = TRUE) %>%
+  mutate(
+    hw3_lag1 = lag(hw_3plus, 1),
+    hw3_lag2 = lag(hw_3plus, 2),
+    hw3_lag3 = lag(hw_3plus, 3)
+  ) %>%
+  ungroup()
+
+fit_lag_85_mean_3 <- gnm(
+  n ~ hw_3plus + hw3_lag1 + hw3_lag2 + hw3_lag3,
+  eliminate = cc_strata,
+  family = poisson(link = "log"),
+  data = dat_85_mean
+)
+
+summary(fit_lag_85_mean_3)
+
+beta <- coef(fit_lag_85_mean_3)[c("hw_3plus", "hw3_lag1", "hw3_lag2", "hw3_lag3")]
+se <- sqrt(diag(vcov(fit_lag_85_mean_3)))[c("hw_3plus", "hw3_lag1", "hw3_lag2", "hw3_lag3")]
+
+results_85_mean_3 <- data.frame(
+  term = c("85 Heat wave (lag 0)", "85 Heat wave (lag 1)", "85 Heat wave (lag 2)", "85 Heat wave (lag 3)"),
+  IRR = exp(beta),
+  LCL = exp(beta - 1.96 * se),
+  UCL = exp(beta + 1.96 * se)
+)
+
+results_85_mean_3
+```
+
+
+##85th mininmum 1 day + lag 
 ```{r}
 dat_85_min <- overall_current_85_min %>%
   mutate(
@@ -383,9 +473,100 @@ results_85_min <- data.frame(
 results_85_min
 ```
 
+##85th minimum 2 day 
+```{r}
+dat_85_min <- dat_85_min %>%
+  left_join(
+    hwe_2day_85_min %>%
+      dplyr::select(site, event_id, zip_code, year) %>% 
+      mutate(hw_2plus = 1L), #identifies when there is a 2+ day hw event
+    by = c("site", "event_id", "Zipcode.of.Incident" = "zip_code", "year")
+  ) 
+
+dat_85_min <- dat_85_min %>%   
+  mutate(hw_2plus = coalesce(hw_2plus, 0L)) #non 2+ day hw flagged as 0 
+
+dat_85_min <- dat_85_min %>%
+  group_by(Zipcode.of.Incident) %>%
+  arrange(Call.Date, .by_group = TRUE) %>%
+  mutate(
+    hw2_lag1 = lag(hw_2plus, 1),
+    hw2_lag2 = lag(hw_2plus, 2),
+    hw2_lag3 = lag(hw_2plus, 3)
+  ) %>%
+  ungroup()
+
+fit_lag_85_min_2 <- gnm(
+  n ~ hw_2plus + hw2_lag1 + hw2_lag2 + hw2_lag3,
+  eliminate = cc_strata,
+  family = poisson(link = "log"),
+  data = dat_85_min
+)
+
+summary(fit_lag_85_min_2)
+
+beta <- coef(fit_lag_85_min_2)[c("hw_2plus", "hw2_lag1", "hw2_lag2", "hw2_lag3")]
+se <- sqrt(diag(vcov(fit_lag_85_min_2)))[c("hw_2plus", "hw2_lag1", "hw2_lag2", "hw2_lag3")]
+
+results_85_min_2plus <- data.frame(
+  term = c("85 Heat wave (lag 0)", "85 Heat wave (lag 1)", "85 Heat wave (lag 2)", "85 Heat wave (lag 3)"),
+  IRR = exp(beta),
+  LCL = exp(beta - 1.96 * se),
+  UCL = exp(beta + 1.96 * se)
+)
+
+results_85_min_2plus
+```
+
+##95th minimum 3 day 
+```{r}
+dat_85_min <- dat_85_min %>%
+  left_join(
+    hwe_3day_85_min %>%
+      dplyr::select(site, event_id, zip_code, year) %>% 
+      mutate(hw_3plus = 1L), #identifies when there is a 3+ day hw event
+    by = c("site", "event_id", "Zipcode.of.Incident" = "zip_code", "year")
+  ) 
+
+dat_85_min <- dat_85_min %>%   
+  mutate(hw_3plus = coalesce(hw_3plus, 0L)) #non 3+ day hw flagged as 0 
+
+dat_85_min <- dat_85_min %>%
+  group_by(Zipcode.of.Incident) %>%
+  arrange(Call.Date, .by_group = TRUE) %>%
+  mutate(
+    hw3_lag1 = lag(hw_3plus, 1),
+    hw3_lag2 = lag(hw_3plus, 2),
+    hw3_lag3 = lag(hw_3plus, 3)
+  ) %>%
+  ungroup()
+
+fit_lag_85_min_3 <- gnm(
+  n ~ hw_3plus + hw3_lag1 + hw3_lag2 + hw3_lag3,
+  eliminate = cc_strata,
+  family = poisson(link = "log"),
+  data = dat_85_min
+)
+
+summary(fit_lag_85_min_3)
+
+beta <- coef(fit_lag_85_min_3)[c("hw_3plus", "hw3_lag1", "hw3_lag2", "hw3_lag3")]
+se <- sqrt(diag(vcov(fit_lag_85_min_3)))[c("hw_3plus", "hw3_lag1", "hw3_lag2", "hw3_lag3")]
+
+results_85_min_3 <- data.frame(
+  term = c("85 Heat wave (lag 0)", "85 Heat wave (lag 1)", "85 Heat wave (lag 2)", "85 Heat wave (lag 3)"),
+  IRR = exp(beta),
+  LCL = exp(beta - 1.96 * se),
+  UCL = exp(beta + 1.96 * se)
+)
+
+results_85_min_3
+```
+
+
 #97.5th percentiles 
 
-##97.5th mean 
+##97.5th mean 1 day + lag
 ```{r}
 dat_975_mean <- overall_current_975_mean %>%
   mutate(
@@ -426,8 +607,98 @@ results_975_mean <- data.frame(
 
 results_975_mean
 ```
+##97.5th mean 2 day 
+```{r}
+dat_975_mean <- dat_975_mean %>%
+  left_join(
+    hwe_2day_975_mean %>%
+      dplyr::select(site, event_id, zip_code, year) %>% 
+      mutate(hw_2plus = 1L), #identifies when there is a 2+ day hw event
+    by = c("site", "event_id", "Zipcode.of.Incident" = "zip_code", "year")
+  ) 
 
-##97.5th minimum 
+dat_975_mean <- dat_975_mean %>%   
+  mutate(hw_2plus = coalesce(hw_2plus, 0L)) #non 2+ day hw flagged as 0 
+
+dat_975_mean <- dat_975_mean %>%
+  group_by(Zipcode.of.Incident) %>%
+  arrange(Call.Date, .by_group = TRUE) %>%
+  mutate(
+    hw2_lag1 = lag(hw_2plus, 1),
+    hw2_lag2 = lag(hw_2plus, 2),
+    hw2_lag3 = lag(hw_2plus, 3)
+  ) %>%
+  ungroup()
+
+fit_lag_975_mean_2 <- gnm(
+  n ~ hw_2plus + hw2_lag1 + hw2_lag2 + hw2_lag3,
+  eliminate = cc_strata,
+  family = poisson(link = "log"),
+  data = dat_975_mean
+)
+
+summary(fit_lag_975_mean_2)
+
+beta <- coef(fit_lag_975_mean_2)[c("hw_2plus", "hw2_lag1", "hw2_lag2", "hw2_lag3")]
+se <- sqrt(diag(vcov(fit_lag_975_mean_2)))[c("hw_2plus", "hw2_lag1", "hw2_lag2", "hw2_lag3")]
+
+results_975_mean_2plus <- data.frame(
+  term = c("97.5 Heat wave (lag 0)", "97.5 Heat wave (lag 1)", "97.5 Heat wave (lag 2)", "97.5 Heat wave (lag 3)"),
+  IRR = exp(beta),
+  LCL = exp(beta - 1.96 * se),
+  UCL = exp(beta + 1.96 * se)
+)
+
+results_975_mean_2plus
+```
+
+##97.5th mean 3 
+```{r}
+dat_975_mean <- dat_975_mean %>%
+  left_join(
+    hwe_3day_975_mean %>%
+      dplyr::select(site, event_id, zip_code, year) %>% 
+      mutate(hw_3plus = 1L), #identifies when there is a 2+ day hw event
+    by = c("site", "event_id", "Zipcode.of.Incident" = "zip_code", "year")
+  ) 
+
+dat_975_mean <- dat_975_mean %>%   
+  mutate(hw_3plus = coalesce(hw_3plus, 0L)) #non 2+ day hw flagged as 0 
+
+dat_975_mean <- dat_975_mean %>%
+  group_by(Zipcode.of.Incident) %>%
+  arrange(Call.Date, .by_group = TRUE) %>%
+  mutate(
+    hw3_lag1 = lag(hw_3plus, 1),
+    hw3_lag2 = lag(hw_3plus, 2),
+    hw3_lag3 = lag(hw_3plus, 3)
+  ) %>%
+  ungroup()
+
+fit_lag_975_mean_3 <- gnm(
+  n ~ hw_3plus + hw3_lag1 + hw3_lag2 + hw3_lag3,
+  eliminate = cc_strata,
+  family = poisson(link = "log"),
+  data = dat_975_mean
+)
+
+summary(fit_lag_975_mean_3)
+
+beta <- coef(fit_lag_975_mean_3)[c("hw_3plus", "hw3_lag1", "hw3_lag2", "hw3_lag3")]
+se <- sqrt(diag(vcov(fit_lag_975_mean_3)))[c("hw_3plus", "hw3_lag1", "hw3_lag2", "hw3_lag3")]
+
+results_975_mean_3plus <- data.frame(
+  term = c("85 Heat wave (lag 0)", "85 Heat wave (lag 1)", "85 Heat wave (lag 2)", "85 Heat wave (lag 3)"),
+  IRR = exp(beta),
+  LCL = exp(beta - 1.96 * se),
+  UCL = exp(beta + 1.96 * se)
+)
+
+results_975_mean_3plus
+```
+
+
+##97.5th minimum 1 day + lag
 ```{r}
 dat_975_min <- overall_current_975_mean %>%
   mutate(
@@ -468,6 +739,97 @@ results_975_min <- data.frame(
 
 results_975_mean
 ```
+##97.5 minimum 2 day 
+```{r}
+dat_975_min <- dat_975_min %>%
+  left_join(
+    hwe_2day_975_min %>%
+      dplyr::select(site, event_id, zip_code, year) %>% 
+      mutate(hw_2plus = 1L), #identifies when there is a 2+ day hw event
+    by = c("site", "event_id", "Zipcode.of.Incident" = "zip_code", "year")
+  ) 
+
+dat_975_min <- dat_975_min %>%   
+  mutate(hw_2plus = coalesce(hw_2plus, 0L)) #non 2+ day hw flagged as 0 
+
+dat_975_min <- dat_975_min %>%
+  group_by(Zipcode.of.Incident) %>%
+  arrange(Call.Date, .by_group = TRUE) %>%
+  mutate(
+    hw2_lag1 = lag(hw_2plus, 1),
+    hw2_lag2 = lag(hw_2plus, 2),
+    hw2_lag3 = lag(hw_2plus, 3)
+  ) %>%
+  ungroup()
+
+fit_lag_975_min_2 <- gnm(
+  n ~ hw_2plus + hw2_lag1 + hw2_lag2 + hw2_lag3,
+  eliminate = cc_strata,
+  family = poisson(link = "log"),
+  data = dat_975_min
+)
+
+summary(fit_lag_975_min_2)
+
+beta <- coef(fit_lag_975_min_2)[c("hw_2plus", "hw2_lag1", "hw2_lag2", "hw2_lag3")]
+se <- sqrt(diag(vcov(fit_lag_975_min_2)))[c("hw_2plus", "hw2_lag1", "hw2_lag2", "hw2_lag3")]
+
+results_975_min_2plus <- data.frame(
+  term = c("97.5 Heat wave (lag 0)", "97.5 Heat wave (lag 1)", "97.5 Heat wave (lag 2)", "97.5 Heat wave (lag 3)"),
+  IRR = exp(beta),
+  LCL = exp(beta - 1.96 * se),
+  UCL = exp(beta + 1.96 * se)
+)
+
+results_975_min_2plus
+```
+
+##97.5th 3 day 
+```{r}
+dat_975_min <- dat_975_min %>%
+  left_join(
+    hwe_3day_975_min %>%
+      dplyr::select(site, event_id, zip_code, year) %>% 
+      mutate(hw_3plus = 1L), #identifies when there is a 3+ day hw event
+    by = c("site", "event_id", "Zipcode.of.Incident" = "zip_code", "year")
+  ) 
+
+dat_975_min <- dat_975_min %>%   
+  mutate(hw_3plus = coalesce(hw_2plus, 0L)) #non 3+ day hw flagged as 0 
+
+dat_975_min <- dat_975_min %>%
+  group_by(Zipcode.of.Incident) %>%
+  arrange(Call.Date, .by_group = TRUE) %>%
+  mutate(
+    hw3_lag1 = lag(hw_3plus, 1),
+    hw3_lag2 = lag(hw_3plus, 2),
+    hw3_lag3 = lag(hw_3plus, 3)
+  ) %>%
+  ungroup()
+
+fit_lag_975_min_3 <- gnm(
+  n ~ hw_3plus + hw3_lag1 + hw3_lag2 + hw3_lag3,
+  eliminate = cc_strata,
+  family = poisson(link = "log"),
+  data = dat_975_min
+)
+
+summary(fit_lag_975_min_3)
+
+beta <- coef(fit_lag_975_min_3)[c("hw_3plus", "hw3_lag1", "hw3_lag2", "hw3_lag3")]
+se <- sqrt(diag(vcov(fit_lag_975_min_3)))[c("hw_3plus", "hw3_lag1", "hw3_lag2", "hw3_lag3")]
+
+results_975_min_3plus <- data.frame(
+  term = c("97.5 Heat wave (lag 0)", "97.5 Heat wave (lag 1)", "97.5 Heat wave (lag 2)", "97.5 Heat wave (lag 3)"),
+  IRR = exp(beta),
+  LCL = exp(beta - 1.96 * se),
+  UCL = exp(beta + 1.96 * se)
+)
+
+results_975_min_3plus
+```
+
+
 #IRR actual percentages 
 ```{r}
 all_results_mean <- rbind(results_85_mean, results_975_mean)
