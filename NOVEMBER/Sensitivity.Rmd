@@ -299,7 +299,7 @@ overall_current_975_min <- overall_current_975_min %>%
 
 #85th percentiles 
 
-##85th mean 1 day + lag
+##mean 1 day + lag
 ```{r}
 dat_85_mean <- overall_current_85_mean %>%
   mutate(
@@ -332,16 +332,19 @@ beta <- coef(fit_lag_85_mean)[c("hw", "hw_lag1", "hw_lag2", "hw_lag3")]
 se <- sqrt(diag(vcov(fit_lag_85_mean)))[c("hw", "hw_lag1", "hw_lag2", "hw_lag3")]
 
 results_85_mean <- data.frame(
-  term = c("85 Heat wave (lag 0)", "85 Heat wave (lag 1)", "85 Heat wave (lag 2)", "85 Heat wave (lag 3)"),
+  percentile = "85th",
+  heatwave = "1+ day",
+  lag = 0:3,
+  #term = c("85 Heat wave (lag 0)", "85 Heat wave (lag 1)", "85 Heat wave (lag 2)", "85 Heat wave (lag 3)"),
   IRR = exp(beta),
   LCL = exp(beta - 1.96 * se),
   UCL = exp(beta + 1.96 * se)
-)
+) 
 
 results_85_mean
 ```
 
-##85th mean 2+ day + lag 
+##mean 2+ day + lag 
 ```{r}
 dat_85_mean <- dat_85_mean %>%
   left_join(
@@ -377,7 +380,10 @@ beta <- coef(fit_lag_85_mean_2)[c("hw_2plus", "hw2_lag1", "hw2_lag2", "hw2_lag3"
 se <- sqrt(diag(vcov(fit_lag_85_mean_2)))[c("hw_2plus", "hw2_lag1", "hw2_lag2", "hw2_lag3")]
 
 results_85_mean_2plus <- data.frame(
-  term = c("85 Heat wave (lag 0)", "85 Heat wave (lag 1)", "85 Heat wave (lag 2)", "85 Heat wave (lag 3)"),
+  percentile = "85th",
+  heatwave = "2+ day",
+  lag = 0:3,
+  #term = c("85 Heat wave (lag 0)", "85 Heat wave (lag 1)", "85 Heat wave (lag 2)", "85 Heat wave (lag 3)"),
   IRR = exp(beta),
   LCL = exp(beta - 1.96 * se),
   UCL = exp(beta + 1.96 * se)
@@ -385,7 +391,7 @@ results_85_mean_2plus <- data.frame(
 
 results_85_mean_2plus
 ```
-##85th mean 3 day + lag 
+##mean 3 day + lag 
 ```{r}
 dat_85_mean <- dat_85_mean %>%
   left_join(
@@ -421,7 +427,10 @@ beta <- coef(fit_lag_85_mean_3)[c("hw_3plus", "hw3_lag1", "hw3_lag2", "hw3_lag3"
 se <- sqrt(diag(vcov(fit_lag_85_mean_3)))[c("hw_3plus", "hw3_lag1", "hw3_lag2", "hw3_lag3")]
 
 results_85_mean_3 <- data.frame(
-  term = c("85 Heat wave (lag 0)", "85 Heat wave (lag 1)", "85 Heat wave (lag 2)", "85 Heat wave (lag 3)"),
+  percentile = "85th",
+  heatwave = "3+ day",
+  lag = 0:3,
+  #term = c("85 Heat wave (lag 0)", "85 Heat wave (lag 1)", "85 Heat wave (lag 2)", "85 Heat wave (lag 3)"),
   IRR = exp(beta),
   LCL = exp(beta - 1.96 * se),
   UCL = exp(beta + 1.96 * se)
@@ -431,7 +440,7 @@ results_85_mean_3
 ```
 
 
-##85th mininmum 1 day + lag 
+##mininmum 1 day + lag 
 ```{r}
 dat_85_min <- overall_current_85_min %>%
   mutate(
@@ -464,7 +473,10 @@ beta <- coef(fit_lag_85_min)[c("hw", "hw_lag1", "hw_lag2", "hw_lag3")]
 se <- sqrt(diag(vcov(fit_lag_85_min)))[c("hw", "hw_lag1", "hw_lag2", "hw_lag3")]
 
 results_85_min <- data.frame(
-  term = c("85 Heat wave (lag 0)", "85 Heat wave (lag 1)", "85 Heat wave (lag 2)", "85 Heat wave (lag 3)"),
+  percentile = "85th",
+  heatwave = "1+ day",
+  lag = 0:3,
+  #term = c("85 Heat wave (lag 0)", "85 Heat wave (lag 1)", "85 Heat wave (lag 2)", "85 Heat wave (lag 3)"),
   IRR = exp(beta),
   LCL = exp(beta - 1.96 * se),
   UCL = exp(beta + 1.96 * se)
@@ -473,7 +485,7 @@ results_85_min <- data.frame(
 results_85_min
 ```
 
-##85th minimum 2 day 
+##minimum 2 day 
 ```{r}
 dat_85_min <- dat_85_min %>%
   left_join(
@@ -509,7 +521,10 @@ beta <- coef(fit_lag_85_min_2)[c("hw_2plus", "hw2_lag1", "hw2_lag2", "hw2_lag3")
 se <- sqrt(diag(vcov(fit_lag_85_min_2)))[c("hw_2plus", "hw2_lag1", "hw2_lag2", "hw2_lag3")]
 
 results_85_min_2plus <- data.frame(
-  term = c("85 Heat wave (lag 0)", "85 Heat wave (lag 1)", "85 Heat wave (lag 2)", "85 Heat wave (lag 3)"),
+  percentile = "85th",
+  heatwave = "2+ day",
+  lag = 0:3,
+  #term = c("85 Heat wave (lag 0)", "85 Heat wave (lag 1)", "85 Heat wave (lag 2)", "85 Heat wave (lag 3)"),
   IRR = exp(beta),
   LCL = exp(beta - 1.96 * se),
   UCL = exp(beta + 1.96 * se)
@@ -518,7 +533,7 @@ results_85_min_2plus <- data.frame(
 results_85_min_2plus
 ```
 
-##95th minimum 3 day 
+##minimum 3 day 
 ```{r}
 dat_85_min <- dat_85_min %>%
   left_join(
@@ -554,7 +569,10 @@ beta <- coef(fit_lag_85_min_3)[c("hw_3plus", "hw3_lag1", "hw3_lag2", "hw3_lag3")
 se <- sqrt(diag(vcov(fit_lag_85_min_3)))[c("hw_3plus", "hw3_lag1", "hw3_lag2", "hw3_lag3")]
 
 results_85_min_3 <- data.frame(
-  term = c("85 Heat wave (lag 0)", "85 Heat wave (lag 1)", "85 Heat wave (lag 2)", "85 Heat wave (lag 3)"),
+  percentile = "85th",
+  heatwave = "3+ day",
+  lag = 0:3,
+  #term = c("85 Heat wave (lag 0)", "85 Heat wave (lag 1)", "85 Heat wave (lag 2)", "85 Heat wave (lag 3)"),
   IRR = exp(beta),
   LCL = exp(beta - 1.96 * se),
   UCL = exp(beta + 1.96 * se)
@@ -599,7 +617,10 @@ beta <- coef(fit_lag_975_mean)[c("hw", "hw_lag1", "hw_lag2", "hw_lag3")]
 se <- sqrt(diag(vcov(fit_lag_975_mean)))[c("hw", "hw_lag1", "hw_lag2", "hw_lag3")]
 
 results_975_mean <- data.frame(
-  term = c("97.5 Heat wave (lag 0)", "97.5 Heat wave (lag 1)", "97.5 Heat wave (lag 2)", "97.5 Heat wave (lag 3)"),
+  percentile = "97.5th",
+  heatwave = "1+ day",
+  lag = 0:3,
+  #term = c("97.5 Heat wave (lag 0)", "97.5 Heat wave (lag 1)", "97.5 Heat wave (lag 2)", "97.5 Heat wave (lag 3)"),
   IRR = exp(beta),
   LCL = exp(beta - 1.96 * se),
   UCL = exp(beta + 1.96 * se)
@@ -643,7 +664,10 @@ beta <- coef(fit_lag_975_mean_2)[c("hw_2plus", "hw2_lag1", "hw2_lag2", "hw2_lag3
 se <- sqrt(diag(vcov(fit_lag_975_mean_2)))[c("hw_2plus", "hw2_lag1", "hw2_lag2", "hw2_lag3")]
 
 results_975_mean_2plus <- data.frame(
-  term = c("97.5 Heat wave (lag 0)", "97.5 Heat wave (lag 1)", "97.5 Heat wave (lag 2)", "97.5 Heat wave (lag 3)"),
+  percentile = "97.5th",
+  heatwave = "2+ day",
+  lag = 0:3,
+  #term = c("97.5 Heat wave (lag 0)", "97.5 Heat wave (lag 1)", "97.5 Heat wave (lag 2)", "97.5 Heat wave (lag 3)"),
   IRR = exp(beta),
   LCL = exp(beta - 1.96 * se),
   UCL = exp(beta + 1.96 * se)
@@ -688,7 +712,10 @@ beta <- coef(fit_lag_975_mean_3)[c("hw_3plus", "hw3_lag1", "hw3_lag2", "hw3_lag3
 se <- sqrt(diag(vcov(fit_lag_975_mean_3)))[c("hw_3plus", "hw3_lag1", "hw3_lag2", "hw3_lag3")]
 
 results_975_mean_3plus <- data.frame(
-  term = c("85 Heat wave (lag 0)", "85 Heat wave (lag 1)", "85 Heat wave (lag 2)", "85 Heat wave (lag 3)"),
+  percentile = "97.5th",
+  heatwave = "3+ day",
+  lag = 0:3,
+  #term = c("97.5 Heat wave (lag 0)", "97.5 Heat wave (lag 1)", "97.5 Heat wave (lag 2)", "97.5 Heat wave (lag 3)"),
   IRR = exp(beta),
   LCL = exp(beta - 1.96 * se),
   UCL = exp(beta + 1.96 * se)
@@ -731,7 +758,10 @@ beta <- coef(fit_lag_975_min)[c("hw", "hw_lag1", "hw_lag2", "hw_lag3")]
 se <- sqrt(diag(vcov(fit_lag_975_min)))[c("hw", "hw_lag1", "hw_lag2", "hw_lag3")]
 
 results_975_min <- data.frame(
-  term = c("97.5 Heat wave (lag 0)", "97.5 Heat wave (lag 1)", "97.5 Heat wave (lag 2)", "97.5 Heat wave (lag 3)"),
+  percentile = "97.5th",
+  heatwave = "1+ day",
+  lag = 0:3,
+  #term = c("97.5 Heat wave (lag 0)", "97.5 Heat wave (lag 1)", "97.5 Heat wave (lag 2)", "97.5 Heat wave (lag 3)"),
   IRR = exp(beta),
   LCL = exp(beta - 1.96 * se),
   UCL = exp(beta + 1.96 * se)
@@ -775,7 +805,10 @@ beta <- coef(fit_lag_975_min_2)[c("hw_2plus", "hw2_lag1", "hw2_lag2", "hw2_lag3"
 se <- sqrt(diag(vcov(fit_lag_975_min_2)))[c("hw_2plus", "hw2_lag1", "hw2_lag2", "hw2_lag3")]
 
 results_975_min_2plus <- data.frame(
-  term = c("97.5 Heat wave (lag 0)", "97.5 Heat wave (lag 1)", "97.5 Heat wave (lag 2)", "97.5 Heat wave (lag 3)"),
+  percentile = "97.5th",
+  heatwave = "2+ day",
+  lag = 0:3,
+  #term = c("97.5 Heat wave (lag 0)", "97.5 Heat wave (lag 1)", "97.5 Heat wave (lag 2)", "97.5 Heat wave (lag 3)"),
   IRR = exp(beta),
   LCL = exp(beta - 1.96 * se),
   UCL = exp(beta + 1.96 * se)
@@ -820,7 +853,10 @@ beta <- coef(fit_lag_975_min_3)[c("hw_3plus", "hw3_lag1", "hw3_lag2", "hw3_lag3"
 se <- sqrt(diag(vcov(fit_lag_975_min_3)))[c("hw_3plus", "hw3_lag1", "hw3_lag2", "hw3_lag3")]
 
 results_975_min_3plus <- data.frame(
-  term = c("97.5 Heat wave (lag 0)", "97.5 Heat wave (lag 1)", "97.5 Heat wave (lag 2)", "97.5 Heat wave (lag 3)"),
+  percentile = "97.5th",
+  heatwave = "3+ day",
+  lag = 0:3,
+  #term = c("97.5 Heat wave (lag 0)", "97.5 Heat wave (lag 1)", "97.5 Heat wave (lag 2)", "97.5 Heat wave (lag 3)"),
   IRR = exp(beta),
   LCL = exp(beta - 1.96 * se),
   UCL = exp(beta + 1.96 * se)
@@ -829,22 +865,47 @@ results_975_min_3plus <- data.frame(
 results_975_min_3plus
 ```
 
+NEXT STEPS 09/25 create data table 
 
 #IRR actual percentages 
 ```{r}
-all_results_mean <- rbind(results_85_mean, results_975_mean)
+#converting IRR to percentages 
+# order of each results are: hw day, hw event 2+, hw events 3+ 
 
-all_results_mean <- all_results_mean %>% 
+all_results_85mean <- rbind(results_85_mean,results_85_mean_2plus, results_85_mean_3)
+
+all_results_975_mean  <- rbind(results_975_mean, results_975_mean_2plus, results_975_mean_3plus)
+
+all_results_85mean <- all_results_85mean %>% 
   mutate(
-    IRR_percent = (IRR - 1)*100
-  )
+    IRR_percent = (IRR - 1)*100 #converting to a percent 
+  ) %>% 
+  dplyr::relocate(IRR_percent, .before = IRR) #move to "front"
 
-all_results_min <- rbind(results_85_min, results_975_min)
+all_results_min <- rbind(results_85_min, results_85_min_2plus, results_85_min_3,
+                         results_975_min, results_975_min_2plus, results_975_min_3plus)
 
 all_results_min <- all_results_min %>% 
   mutate(
-    IRR_percent = (IRR - 1)*100
+    IRR_percent = (IRR - 1)*100 #converting to a percent
+  ) %>% 
+  dplyr::relocate(IRR_percent, .before = IRR) #move to "front"
+
+```
+
+#presentable data 
+```{r}
+# install.packages("gt")
+library(gt)
+
+head(all_results_mean)
+
+all_results_mean %>% 
+  gt() %>% 
+  tab_header(
+    title = "IRR Percentiles By Heatwave and Sensitvity Measure"
   )
 
+# hw definition , percentile separate? , lag , irr 
 ```
 
