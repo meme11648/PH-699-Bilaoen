@@ -874,13 +874,20 @@ NEXT STEPS 09/25 create data table
 
 all_results_85mean <- rbind(results_85_mean,results_85_mean_2plus, results_85_mean_3)
 
-all_results_975_mean  <- rbind(results_975_mean, results_975_mean_2plus, results_975_mean_3plus)
-
 all_results_85mean <- all_results_85mean %>% 
   mutate(
     IRR_percent = (IRR - 1)*100 #converting to a percent 
   ) %>% 
   dplyr::relocate(IRR_percent, .before = IRR) #move to "front"
+
+all_results_975_mean  <- rbind(results_975_mean, results_975_mean_2plus, results_975_mean_3plus)
+
+all_results_975_mean <- all_results_975_mean %>% 
+  mutate(
+    IRR_percent = (IRR - 1)*100 #converting to a percent 
+  ) %>% 
+  dplyr::relocate(IRR_percent, .before = IRR) #move to "front"
+
 
 all_results_min <- rbind(results_85_min, results_85_min_2plus, results_85_min_3,
                          results_975_min, results_975_min_2plus, results_975_min_3plus)
@@ -891,6 +898,7 @@ all_results_min <- all_results_min %>%
   ) %>% 
   dplyr::relocate(IRR_percent, .before = IRR) #move to "front"
 
+
 ```
 
 #presentable data 
@@ -898,14 +906,23 @@ all_results_min <- all_results_min %>%
 # install.packages("gt")
 library(gt)
 
-head(all_results_mean)
+head(all_results_min)
 
-all_results_mean %>% 
+all_results_min %>% 
   gt() %>% 
   tab_header(
     title = "IRR Percentiles By Heatwave and Sensitvity Measure"
   )
 
+all
 # hw definition , percentile separate? , lag , irr 
+```
+
+```{r}
+actual_temp <- daymet_percentiles %>%
+  mutate(across(.cols = -1, ~ (.x * 9/5) + 32))
+
+print(actual_temp)
+  
 ```
 

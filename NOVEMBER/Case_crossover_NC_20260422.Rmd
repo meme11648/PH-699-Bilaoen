@@ -4,7 +4,6 @@ author: "Mahal Bilaoen - Edited by Nancy Carmona"
 date: "`r Sys.Date()`"
 output: html_document
 ---
-
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 
@@ -125,6 +124,7 @@ huh <- medical_incidents %>%
   mutate(Call.Date = mdy(Call.Date)) %>%
   filter(is.na(Zipcode.of.Incident))
 
+#needs to be recalc'd
 334/706993
 #0.000472% calls are missing zipcodes 
 ```
@@ -197,15 +197,15 @@ data.frame(
 )
 
 # percent increase
-(1.101841 - 1) * 100
+(1.120847 - 1) * 100
 
-# 10.18% higher 911 call rates on heat-wave days.
+# 12.08% higher 911 call rates on heat-wave days.
 
 
 # 
 c(
-  lower_pct = (1.087843 - 1) * 100,
-  upper_pct = (1.11602 - 1) * 100
+  lower_pct = (1.102011 - 1) * 100, #10.20
+  upper_pct = (1.140004 - 1) * 100  #14.00
 )
 
 
@@ -718,7 +718,7 @@ day_3 = (0.963118 - 1) * 100  #day 3 -0.37%
 )
 ```
 
-#IRR for the 9th percentile using mean and minimum
+#IRR for the 95th percentile using mean and minimum
 ```{r}
 all_results_mean <- rbind(results,results_2plus_1lag,results_3plus_1lag)
 
